@@ -546,6 +546,11 @@ class TestValidarMensagem(unittest.TestCase):
             self.assertIsNotNone(problema, trecho)
             self.assertIn(trecho.lower(), problema.lower())
 
+    def test_nome_generico_e_pulado(self):
+        contato = {"clinica": "Implantes Dentários | Dentista | Ortoriso Aracaju",
+                   "bairro": "Centro", "cidade": "Aracaju"}
+        self.assertIn("genérico", pw.validar_mensagem(pw.montar_texto(contato), contato))
+
     def test_paragrafo_duplicado(self):
         boa = pw.montar_texto(self.CONTATO)
         paragrafo = [l for l in boa.splitlines() if len(l) > 20][0]
@@ -577,7 +582,13 @@ class TestModoAutomatico(BasePw):
     def setUp(self):
         super().setUp()
         self._orig = (pw.SessaoWeb.__dict__.copy(), pw.ARQUIVO_TRAVA, pw.PASTA_LOGS,
-                      pw.dia_util, pw.SessaoWeb)
+                      pw.dia_util, pw.SessaoWeb, pw.notificar_windows,
+                      pw.verificar_conversas)
+        self.avisos = []
+        pw.notificar_windows = lambda titulo, texto: self.avisos.append((titulo, texto))
+        pw.verificar_conversas = lambda planilha, sessao, **kw: {
+            "conferidas": 0, "problemas": [], "respostas": [], "optouts": [],
+            "automaticas": [], "erro": None}
         pw.ARQUIVO_TRAVA = self.tmpdir / ".envio.lock"
         pw.PASTA_LOGS = self.tmpdir / "logs"
         pw.dia_util = lambda agora=None: True
@@ -598,21 +609,23 @@ class TestModoAutomatico(BasePw):
                                        intervalo_min=0, intervalo_max=0)
 
     def tearDown(self):
-        _, pw.ARQUIVO_TRAVA, pw.PASTA_LOGS, pw.dia_util, pw.SessaoWeb = self._orig
+        (_, pw.ARQUIVO_TRAVA, pw.PASTA_LOGS, pw.dia_util, pw.SessaoWeb,
+         pw.notificar_windows, pw.verificar_conversas) = self._orig
         super().tearDown()
 
     def _rodar(self, roteiro):
+        self.planilha.salvar()  # o modo automático relê o CSV do disco
         _SessaoFalsa.roteiro = list(roteiro)
         with redirect_stdout(io.StringIO()) as saida:
             n = pw.rodar_automatico(self.planilha, self.args, pw.carregar_mensagens())
         return n, saida.getvalue()
 
-    def test_respeita_cota_e_pula_fixo_e_sem_whatsapp(self):
+    def test_respeita_cota_celular_antes_de_fixo_e_sem_whatsapp(self):
         sem = (False, pw.SessaoWeb.SEM_WHATSAPP, False)
         ok = (True, None, True)
         n, log = self._rodar([sem, ok, ok])
         self.assertEqual(n, 2)                                  # cota = 2
-        self.assertNotIn("557932000000", _SessaoFalsa.chamadas)  # fixo nunca tentado
+        self.assertNotIn("557932000000", _SessaoFalsa.chamadas)  # fixo só depois
         self.assertEqual(self.planilha.contatos[0]["status"], "sem_whatsapp")
         self.assertEqual(pw.envios_hoje(), 2)
         self.assertFalse(pw.ARQUIVO_TRAVA.exists())             # trava liberada
@@ -627,7 +640,8 @@ class TestModoAutomatico(BasePw):
         tec = (False, pw.SessaoWeb.TECNICO, False)
         n, log = self._rodar([tec, tec])
         self.assertEqual(n, 0)
-        self.assertIn("2 falhas seguidas", log)
+        self.assertIn("2 falhas", log)
+        self.assertTrue(self.avisos)  # avisou no Windows
         self.assertEqual(len(_SessaoFalsa.chamadas), 2)
 
     def test_para_se_envio_nao_foi_conferido(self):
@@ -643,11 +657,127 @@ class TestModoAutomatico(BasePw):
         self.assertEqual(n, 2)
         self.assertEqual(_SessaoFalsa.chamadas[0], _SessaoFalsa.chamadas[1])
 
+    def test_fixo_entra_na_fila_depois_dos_celulares(self):
+        self.args.limite_dia = 10
+        ok = (True, None, True)
+        n, _ = self._rodar([ok, ok, ok, ok, (False, pw.SessaoWeb.SEM_WHATSAPP, False)])
+        self.assertEqual(n, 4)
+        self.assertEqual(_SessaoFalsa.chamadas[-1], "557932000000")
+        self.assertEqual(self.planilha.contatos[-1]["status"], "sem_whatsapp")
+
+    def test_mesma_clinica_com_outro_numero_nao_recebe(self):
+        self.args.limite_dia = 10
+        self.planilha.adicionar(_contato(clinica="Clínica ALFA - Consultas | Exames",
+                                         bairro="Centro", telefone="5579990000099"))
+        ok = (True, None, True)
+        n, log = self._rodar([ok] * 4 + [(False, pw.SessaoWeb.SEM_WHATSAPP, False)])
+        self.assertNotIn("5579990000099", _SessaoFalsa.chamadas)
+        self.assertEqual(self.planilha.contatos[-1]["status"], "mesma_clinica")
+        self.assertIn("MESMA CLÍNICA", log)
+
+    def test_nome_bloqueado_nunca_recebe(self):
+        self.planilha.contatos[0]["clinica"] = "PROIMAGEM Diagnóstico"
+        n, log = self._rodar([(True, None, True), (True, None, True)])
+        self.assertNotIn("5579990000000", _SessaoFalsa.chamadas)
+        self.assertEqual(self.planilha.contatos[0]["status"], "bloqueado")
+
+    def test_resumo_vai_para_o_proprio_numero(self):
+        self.args.resumo_para = "79981677954"
+        ok = (True, None, True)
+        n, log = self._rodar([ok, ok, ok])  # 2 envios + 1 resumo
+        self.assertEqual(n, 2)
+        self.assertEqual(_SessaoFalsa.chamadas[-1], "5579981677954")
+        self.assertEqual(pw.envios_hoje(), 2)  # resumo não conta no limite
+
+    def test_reler_csv_preserva_contatos_gravados_pelo_minerador(self):
+        self.planilha.salvar()
+        # minerador grava um contato novo DEPOIS de o envio ter carregado o CSV
+        outra = pw.carregar_planilha(self.planilha.caminho)
+        outra.adicionar(_contato(clinica="Nova do Minerador", telefone="5579990000077"))
+        outra.salvar()
+        _SessaoFalsa.roteiro = [(True, None, True)] * 2
+        with redirect_stdout(io.StringIO()):
+            pw.rodar_automatico(self.planilha, self.args, pw.carregar_mensagens())
+        self.assertIn("Nova do Minerador",
+                      self.planilha.caminho.read_text(encoding="utf-8"))
+
     def test_nao_faz_nada_em_feriado_ou_fora_da_janela(self):
         pw.dia_util = lambda agora=None: False
         n, log = self._rodar([])
         self.assertEqual((n, _SessaoFalsa.chamadas), (0, []))
         self.assertIn("não é dia útil", log)
+
+
+class TestLeituraDeRespostas(unittest.TestCase):
+    ENVIADA = pw.montar_texto({"clinica": "MB Odontologia", "bairro": "Centro",
+                               "cidade": "Aracaju"})
+    DESDE = datetime(2026, 11, 10, 8, 25, 31)
+
+    def _bolha(self, hora, quem, texto):
+        return pw.interpretar_bolha(f"[{hora}, 10/11/2026] {quem}: ", texto)
+
+    def test_interpreta_cabecalho_da_bolha(self):
+        b = self._bolha("08:25", "Nickolas", "oi")
+        self.assertEqual((b["remetente"], b["quando"]),
+                         ("Nickolas", datetime(2026, 11, 10, 8, 25)))
+
+    def test_robo_imediato_e_resposta_automatica(self):
+        bolhas = [self._bolha("08:25", "Nickolas", self.ENVIADA),
+                  self._bolha("08:25", "MB Odontologia",
+                              "Olá! Me chamo Gabi, sou a secretária. Como posso ajudar?")]
+        self.assertEqual(pw.classificar_resposta(bolhas, [self.ENVIADA], self.DESDE),
+                         "resposta automatica")
+
+    def test_pessoa_respondendo_depois(self):
+        bolhas = [self._bolha("08:25", "Nickolas", self.ENVIADA),
+                  self._bolha("08:25", "MB", "Seja bem-vindo! Escolha uma das opções"),
+                  self._bolha("10:12", "MB", "Oi Nickolas, pode ser quinta às 14h?")]
+        self.assertEqual(pw.classificar_resposta(bolhas, [self.ENVIADA], self.DESDE),
+                         "respondeu")
+
+    def test_opt_out(self):
+        bolhas = [self._bolha("08:25", "Nickolas", self.ENVIADA),
+                  self._bolha("11:00", "MB", "Obrigado, mas não temos interesse.")]
+        self.assertEqual(pw.classificar_resposta(bolhas, [self.ENVIADA], self.DESDE),
+                         "sem interesse")
+
+    def test_frase_comum_nao_vira_opt_out(self):
+        bolhas = [self._bolha("08:25", "Nickolas", self.ENVIADA),
+                  self._bolha("11:00", "MB", "Para agendar, me passa seu horário?")]
+        self.assertEqual(pw.classificar_resposta(bolhas, [self.ENVIADA], self.DESDE),
+                         "respondeu")
+
+    def test_sem_resposta_ou_mensagens_antigas(self):
+        bolhas = [self._bolha("07:00", "MB", "mensagem antiga de ontem"),
+                  self._bolha("08:25", "Nickolas", self.ENVIADA)]
+        self.assertIsNone(pw.classificar_resposta(bolhas, [self.ENVIADA], self.DESDE))
+
+    def test_sem_a_nossa_mensagem_nao_classifica(self):
+        bolhas = [self._bolha("11:00", "MB", "oi")]
+        self.assertIsNone(pw.classificar_resposta(bolhas, [self.ENVIADA], self.DESDE))
+
+
+class TestChaveClinica(unittest.TestCase):
+    def test_mesma_clinica_com_nomes_diferentes(self):
+        a = {"clinica": "Clínica CALE - Consultas | Exames | Laboratório", "bairro": ""}
+        b = {"clinica": "Clinica Cale", "bairro": ""}
+        self.assertEqual(pw.chave_clinica(a), pw.chave_clinica(b))
+
+    def test_clinicas_diferentes(self):
+        self.assertNotEqual(pw.chave_clinica({"clinica": "Odonto Center", "bairro": ""}),
+                            pw.chave_clinica({"clinica": "Odonto House", "bairro": ""}))
+
+
+class TestResumo(unittest.TestCase):
+    def test_resumo_lista_o_essencial(self):
+        texto = pw.montar_resumo(
+            ["MB Odontologia"], ["Fixo X"], [],
+            {"conferidas": 1, "problemas": ["Y: mensagem aparece 2x"],
+             "respostas": ["Odonto Center"], "optouts": [], "automaticas": []},
+            pendentes=5, limite_dia=10, parada=None)
+        for trecho in ("Enviadas: 1", "MB Odontologia", "ATENÇÃO: Y", "Odonto Center",
+                       "Sem WhatsApp", "Fila acabando"):
+            self.assertIn(trecho, texto)
 
 
 class TestReset(unittest.TestCase):

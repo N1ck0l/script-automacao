@@ -14,8 +14,9 @@ banimento de chip pela Meta.
 | `mensagens.json` | Textos da abordagem e do follow-up (spintax + tokens) — edite aqui, não no código |
 | `minerador_maps.py` | Minerador de empresas no Google Maps (Playwright) → `prospeccao.csv` |
 | `prospeccao.csv` | Contatos (`clinica,bairro,cidade,telefone,site,avaliacoes,status,resposta,atualizado_em,ultimo_envio,followups`) |
-| `test_prospeccao.py` + `test_minerador.py` | 92 testes do núcleo anti-ban, do modo automático e da mineração (unittest, zero dependências) |
+| `test_prospeccao.py` + `test_minerador.py` | 111 testes do núcleo anti-ban, do modo automático e da mineração (unittest, zero dependências) |
 | `logs/` | Log diário do modo automático (`automatico_AAAA-MM-DD.log`) |
+| `termos_mineracao.txt` | Termos do rodízio semanal do minerador |
 | `historico_envios.jsonl` | Auditoria: todo envio confirmado é registrado aqui |
 | `requirements.txt` | `playwright`, `selenium` (opcional) |
 
@@ -166,11 +167,20 @@ python prospeccao_whatsapp.py --listar      # vê a coluna RESPOSTA na tabela
 ## Modo automático (agendado)
 
 ```bash
-python prospeccao_whatsapp.py --automatico --limite-dia 10
+python prospeccao_whatsapp.py --automatico --limite-dia 10 --atraso-max 40 --resumo-para 5579981677954
 ```
 
-Envia **sem operador** para os contatos `pendente` com **celular**, até a cota
-do dia. Agendado no Agendador de Tarefas do Windows como **"Prospeccao
+Envia **sem operador** para os contatos `pendente` — **celulares primeiro,
+depois fixos** (número sem WhatsApp é detectado sem enviar nada e vira
+`sem_whatsapp`) — até a cota do dia. Depois, confere as entregas do dia, lê as
+respostas e manda um **resumo para o seu WhatsApp** (`--resumo-para`). Começa
+num horário sorteado de 0 a `--atraso-max` minutos após o agendamento.
+
+Nunca recebem mensagem automática:
+- a **mesma clínica** por outro número (nome limpo igual → `mesma_clinica`);
+- nomes da lista de bloqueio (`BLOQUEIO_NOMES`, inclui PROIMAGEM → `bloqueado`);
+- nomes **genéricos** sem a marca ("Implantes Dentários", "Dentista 24Horas"):
+  ficam pendentes e aparecem como "pulados" — corrija o nome no CSV. Agendado no Agendador de Tarefas do Windows como **"Prospeccao
 WhatsApp"**: segunda a sexta, 9h (se o PC estiver desligado às 9h, roda quando
 ligar — dentro da janela 8h–19h). O PC precisa estar ligado e com o usuário
 logado; o login do WhatsApp Web fica salvo em `.perfil_whatsapp_web/`.
@@ -188,6 +198,34 @@ Checagens em cada etapa (a meta é erro zero, então na dúvida ele **não envia
 | Logo antes do ENTER | Número não recebeu nada hoje; texto ainda confere | Não envia |
 | Depois do ENTER | Uma bolha nova com exatamente o texto aparece na conversa | Registra e **para tudo** |
 | Geral | 2 falhas técnicas seguidas | **Para tudo** |
+| Depois dos envios | Cada mensagem de hoje aparece **exatamente 1 vez** na conversa | Alerta no resumo e no Windows |
+
+Avisos: o **resumo diário** chega no seu WhatsApp; se algo der errado (ou a
+fila estiver acabando), aparece também uma **notificação do Windows** — útil
+quando o próprio WhatsApp desconectou. Detalhes no log do dia em `logs/`.
+
+### Respostas e verificação (somente leitura)
+
+```bash
+python prospeccao_whatsapp.py --verificar
+```
+
+Abre as conversas **sem digitar nada**, confere as entregas de hoje e
+classifica as respostas: `respondeu` (pessoa), `resposta automatica` (robô:
+resposta em até 2 min ou frases típicas — 4 de 5 clínicas do 1º lote têm robô)
+ou `sem interesse` (vira `nao_contatar`). O modo automático faz isso todo dia.
+Abrir a conversa marca as mensagens da clínica como lidas.
+
+### Rodízio do minerador (semanal)
+
+```bash
+python minerador_maps.py --rodizio --max 40
+```
+
+Usa o próximo termo de `termos_mineracao.txt` (edite à vontade; sem clínicas
+de imagem/diagnóstico) e inclui fixos. Só grava o CSV com a trava de envio,
+para nunca colidir com o envio automático. Agendado como **"Prospeccao
+Minerador"** (segundas, 7h30).
 
 Acompanhe pelo log do dia em `logs/` e por `--listar`. Para pausar:
 `Disable-ScheduledTask -TaskName "Prospeccao WhatsApp"` (PowerShell); para

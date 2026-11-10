@@ -200,5 +200,35 @@ class TestIntegrarCsv(unittest.TestCase):
         self.assertIn("Nova", conteudo)
 
 
+class TestRodizio(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.termos = self.dir / "termos.txt"
+        self.estado = self.dir / ".rodizio"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_le_termos_ignorando_comentarios(self):
+        self.termos.write_text("# comentário\nA\n\n  B  \n# outro\n", encoding="utf-8")
+        self.assertEqual(mm.ler_termos(self.termos), ["A", "B"])
+
+    def test_rodizio_avanca_e_volta_ao_inicio(self):
+        termos = ["A", "B", "C"]
+        vistos = []
+        for _ in range(4):
+            termo, i = mm.proximo_termo(termos, self.estado)
+            vistos.append(termo)
+            mm.avancar_rodizio(i, self.estado)
+        self.assertEqual(vistos, ["A", "B", "C", "A"])
+
+    def test_termos_reais_nao_buscam_concorrentes_de_imagem(self):
+        for termo in mm.ler_termos():
+            for proibido in ("imagem", "diagnost", "radiolog", "ultrass", "tomograf",
+                             "resson", "proimagem"):
+                self.assertNotIn(proibido, termo.lower(), termo)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

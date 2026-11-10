@@ -68,7 +68,7 @@ ENVIADO = "enviado"
 NAO_CONTATAR = "nao_contatar"  # opt-out: nunca volta à fila (nem com --reset)
 
 # Respostas que ainda admitem follow-up
-RESPOSTAS_EM_ABERTO = {"", "aguardando", "sem resposta"}
+RESPOSTAS_EM_ABERTO = {"", "aguardando", "sem resposta", "resposta automatica"}
 
 # Tipos de envio
 INICIAL = "inicial"
@@ -1111,6 +1111,15 @@ def rodar_fila(fila: list[dict], planilha: Planilha, args: argparse.Namespace,
                         continue
                     reenvio_autorizado.add(contato["telefone"])
 
+                # Mesma clínica já contatada por outro número?
+                if chave_clinica(contato) in clinicas_ja_contatadas(planilha.contatos):
+                    print(f"\n[ALERTA] {contato['clinica']} parece ser uma clínica já "
+                          "contatada por outro número.")
+                    if input("Enviar mesmo assim? [s/N]: ").strip().lower() != "s":
+                        print("[SKIP] Mesma clínica — não enviado.")
+                        indice += 1
+                        continue
+
                 # Intervalo mínimo desde o ÚLTIMO ENVIO real (pular ou pedir
                 # nova variação não reinicia a espera).
                 restante = segundos_de_espera(ultimo_envio(), intervalo_alvo,
@@ -1201,6 +1210,15 @@ PASTA_LOGS = BASE_DIR / "logs"
 TEXTOS_PROIBIDOS = ("proimagem", "prévia", "previa")
 
 
+# Nomes que são só a especialidade (o Maps às vezes põe a marca depois do "|").
+NOMES_GENERICOS = {
+    "implantesdentarios", "implantedentario", "dentista", "dentistas", "odontologia",
+    "clinicaodontologica", "consultorioodontologico", "clinicamedica", "clinica",
+    "consultorio", "ortodontia", "ortodontista", "centromedico", "clinicadesaude",
+    "dentista24horas", "dentista24h", "urgenciaodontologica",
+}
+
+
 def validar_mensagem(mensagem: str, contato: dict) -> str | None:
     """Checagem final de uma mensagem gerada. Retorna o problema ou None.
 
@@ -1219,6 +1237,8 @@ def validar_mensagem(mensagem: str, contato: dict) -> str | None:
             return f"texto proibido: '{proibido}'"
     if nome not in mensagem:
         return "nome da clínica ausente"
+    if chave_clinica({"clinica": nome}) in NOMES_GENERICOS:
+        return f"nome genérico, sem a marca da clínica: '{nome}' (corrija no CSV)"
     if len(nome) > 50 or len(re.findall(r"[^\W\d_]", nome)) < 3:
         return f"nome suspeito para envio automático: '{nome}'"
     if not 200 <= len(mensagem) <= 1500:
@@ -1266,20 +1286,314 @@ def conectar_whatsapp(segundos: int = 300) -> bool:
         sessao.fechar()
 
 
+BLOQUEIO_NOMES = ("proimagem",)  # nunca contatar (empregador do operador)
+STATUS_MESMA_CLINICA = "mesma_clinica"
+STATUS_BLOQUEADO = "bloqueado"
+
+
+def chave_clinica(contato: dict) -> str:
+    """Identidade da clínica pelo nome limpo, sem acento/caixa/pontuação.
+
+    "Clínica CALE - Consultas | Exames" e "Clinica Cale" viram a mesma chave,
+    para não mandar duas mensagens à mesma clínica com números diferentes.
+    """
+    import unicodedata
+    nome = nome_para_mensagem(contato["clinica"], contato.get("bairro", ""),
+                              contato.get("cidade") or CIDADE_PADRAO)
+    sem_acento = unicodedata.normalize("NFKD", nome).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]", "", sem_acento.lower())
+
+
+def nome_bloqueado(contato: dict) -> bool:
+    baixo = contato["clinica"].lower()
+    return any(b in baixo for b in BLOQUEIO_NOMES)
+
+
+def clinicas_ja_contatadas(contatos: list[dict]) -> set[str]:
+    return {chave_clinica(c) for c in contatos if c["status"] in (ENVIADO, NAO_CONTATAR)}
+
+
+# --- Leitura das conversas (somente leitura) --------------------------------
+
+_RE_PRE = re.compile(r"\[(\d{1,2}):(\d{2}), (\d{1,2})/(\d{1,2})/(\d{4})\]\s*(.*?):\s*$")
+
+FRASES_BOT = (
+    "seja bem-vindo", "seja bem vindo", "agradece seu contato", "agradece o seu contato",
+    "obrigado pelo contato", "obrigada pelo contato", "estamos ausentes",
+    "escolha uma das opções", "escolha uma das opcoes", "digite o número",
+    "digite o numero", "retornaremos", "horário de atendimento",
+    "horario de atendimento", "mensagem automática", "mensagem automatica",
+    "assim que possível", "em breve",
+)
+PADROES_OPTOUT = (
+    r"\bn[ãa]o\s+(?:tenho|temos|h[áa])\s+interesse", r"\bsem\s+interesse\b",
+    r"\bpare\b", r"\bremov", r"\bdescadastr", r"\bn[ãa]o\s+(?:me\s+)?(?:envie|mande)",
+    r"\bn[ãa]o\s+entre\s+em\s+contato",
+)
+
+
+def interpretar_bolha(pre: str, texto: str) -> dict:
+    """Converte o atributo data-pre-plain-text ('[08:25, 10/11/2026] Nome: ')."""
+    m = _RE_PRE.match(pre or "")
+    quando = None
+    remetente = ""
+    if m:
+        hh, mi, dd, mm, aaaa, remetente = m.groups()
+        try:
+            quando = datetime(int(aaaa), int(mm), int(dd), int(hh), int(mi))
+        except ValueError:
+            quando = None
+    return {"remetente": remetente.strip(), "quando": quando, "texto": texto or ""}
+
+
+def classificar_resposta(bolhas: list[dict], enviadas: list[str],
+                         desde: datetime) -> str | None:
+    """Classifica o que a clínica respondeu depois do nosso envio.
+
+    Retorna "sem interesse" | "respondeu" | "resposta automatica" | None (nada).
+    Resposta em até 2 min ou com frase típica de robô conta como automática —
+    4 de 5 clínicas do primeiro lote responderam com robô.
+    """
+    eu = next((b["remetente"] for b in bolhas
+               if any(texto_confere(b["texto"], e) for e in enviadas)), None)
+    if eu is None:
+        return None  # não achamos nossa mensagem: não dá para separar os lados
+    inicio = desde.replace(second=0, microsecond=0)
+    recebidas = [b for b in bolhas
+                 if b["remetente"] != eu and b["quando"] and b["quando"] >= inicio]
+    if not recebidas:
+        return None
+    texto_todo = " ".join(b["texto"].lower() for b in recebidas)
+    if any(re.search(p, texto_todo) for p in PADROES_OPTOUT):
+        return "sem interesse"
+
+    def automatica(b: dict) -> bool:
+        rapida = (b["quando"] - inicio).total_seconds() <= 120
+        return rapida or any(f in b["texto"].lower() for f in FRASES_BOT)
+
+    return "respondeu" if any(not automatica(b) for b in recebidas) else "resposta automatica"
+
+
+JS_BOLHAS = """
+return [...document.querySelectorAll('#main [data-pre-plain-text]')].map(b => {
+  const t = b.querySelector('[data-testid="selectable-text"]');
+  return [b.getAttribute('data-pre-plain-text') || '', (t || b).innerText || ''];
+});
+"""
+
+
+def ler_conversa(sessao: "SessaoWeb", numero: str,
+                 esperar_texto: str | None = None) -> list[dict] | str:
+    """Abre a conversa SEM texto (nada é digitado) e devolve as bolhas visíveis.
+
+    O histórico carrega aos poucos (principalmente logo após abrir o Chrome):
+    lê de novo até a lista estabilizar; com `esperar_texto`, espera até ~20s
+    essa mensagem aparecer antes de concluir que ela não está lá.
+    Retorna a lista de bolhas, ou o código de erro (sem_whatsapp/deslogado/tecnico).
+    """
+    driver = sessao._garantir_driver()
+    driver.get(f"https://web.whatsapp.com/send?phone={numero}")
+    caixa, situacao = sessao._esperar_conversa(driver, segundos=45)
+    if situacao:
+        return situacao
+    if caixa is None:
+        return SessaoWeb.TECNICO
+
+    # O histórico carrega em etapas, com pausas de vários segundos entre elas
+    # (medido: só a última bolha aparece primeiro). Por isso não basta a lista
+    # "parar de mudar" por 1–2s.
+    bolhas: list[dict] = []
+    anterior, estavel = -1, 0
+    inicio = time.time()
+    while time.time() - inicio < 30:
+        time.sleep(1)
+        try:
+            bolhas = [interpretar_bolha(pre, txt)
+                      for pre, txt in driver.execute_script(JS_BOLHAS)]
+        except Exception:  # noqa: BLE001 - re-renderização; tenta de novo
+            continue
+        if esperar_texto:
+            if any(texto_confere(b["texto"], esperar_texto) for b in bolhas):
+                break
+            continue
+        estavel = estavel + 1 if len(bolhas) == anterior else 0
+        anterior = len(bolhas)
+        if estavel >= 5 and time.time() - inicio >= 8:
+            break
+    return bolhas
+
+
+def mensagens_enviadas_por_numero(desde_dias: int = 30) -> dict[str, list[dict]]:
+    """Histórico agrupado por telefone (mais antigo -> mais recente)."""
+    limite = datetime.now().timestamp() - desde_dias * 86400
+    grupos: dict[str, list[dict]] = {}
+    for r in ler_historico():
+        quando = _data(r.get("timestamp", ""))
+        if quando and quando.timestamp() >= limite and r.get("telefone"):
+            grupos.setdefault(r["telefone"], []).append(r)
+    return grupos
+
+
+def verificar_conversas(planilha: Planilha, sessao: "SessaoWeb",
+                        max_conversas: int = 40) -> dict:
+    """Uma passada de leitura: confere as entregas de hoje e lê respostas.
+
+    - Entregas: para cada número que recebeu hoje, a última mensagem enviada
+      aparece exatamente 1 vez na conversa? (0 = não chegou, 2+ = duplicada)
+    - Respostas: classifica e atualiza o CSV (respondeu / resposta automatica /
+      sem interesse -> nao_contatar).
+    """
+    hoje = datetime.now().date()
+    historico = mensagens_enviadas_por_numero(30)
+    por_tel = {c["telefone"]: c for c in planilha.contatos}
+
+    conferir = {tel for tel, regs in historico.items()
+                if any((_data(r["timestamp"]) or datetime.min).date() == hoje for r in regs)}
+    responder = {c["telefone"] for c in planilha.contatos
+                 if c["status"] == ENVIADO
+                 and (c.get("resposta") or "") in RESPOSTAS_EM_ABERTO | {"resposta automatica"}
+                 and c["telefone"] in historico}
+    relatorio = {"conferidas": 0, "problemas": [], "respostas": [], "optouts": [],
+                 "automaticas": [], "erro": None}
+
+    for tel in sorted(conferir | responder)[:max_conversas]:
+        contato = por_tel.get(tel, {"clinica": tel})
+        enviadas = [r.get("mensagem", "") for r in historico.get(tel, [])]
+        bolhas = ler_conversa(sessao, tel,
+                              esperar_texto=enviadas[-1] if tel in conferir and enviadas
+                              else None)
+        if isinstance(bolhas, str):
+            if bolhas == SessaoWeb.DESLOGADO:
+                relatorio["erro"] = "WhatsApp Web desconectado"
+                break
+            continue
+        if tel in conferir and enviadas:
+            vezes = sum(1 for b in bolhas if texto_confere(b["texto"], enviadas[-1]))
+            if vezes == 0:  # o histórico às vezes demora: reabre e lê de novo
+                releitura = ler_conversa(sessao, tel, esperar_texto=enviadas[-1])
+                if not isinstance(releitura, str):
+                    bolhas = releitura
+                    vezes = sum(1 for b in bolhas
+                                if texto_confere(b["texto"], enviadas[-1]))
+            if vezes == 1:
+                relatorio["conferidas"] += 1
+            else:
+                relatorio["problemas"].append(
+                    f"{contato['clinica'][:40]}: mensagem "
+                    f"{'NÃO encontrada' if vezes == 0 else f'aparece {vezes}x'}")
+        if tel in responder and "status" in contato:
+            desde = _data(contato.get("ultimo_envio") or contato.get("atualizado_em") or "")
+            if desde is None:
+                continue
+            resposta = classificar_resposta(bolhas, enviadas, desde)
+            if resposta and resposta != contato.get("resposta"):
+                contato["resposta"] = resposta
+                contato["atualizado_em"] = datetime.now().isoformat(timespec="seconds")
+                nome = nome_para_mensagem(contato["clinica"], contato.get("bairro", ""),
+                                          contato.get("cidade") or CIDADE_PADRAO)
+                if resposta == "sem interesse":
+                    contato["status"] = NAO_CONTATAR
+                    relatorio["optouts"].append(nome)
+                elif resposta == "respondeu":
+                    relatorio["respostas"].append(nome)
+                else:
+                    relatorio["automaticas"].append(nome)
+                planilha.salvar()
+    return relatorio
+
+
+# --- Avisos -------------------------------------------------------------------
+
+def notificar_windows(titulo: str, texto: str) -> None:
+    """Notificação do Windows (canto da tela). Silenciosa se não for possível."""
+    if sys.platform != "win32":
+        return
+    import base64
+    import subprocess
+    from xml.sax.saxutils import escape
+    xml = ("<toast><visual><binding template='ToastGeneric'>"
+           f"<text>{escape(titulo)}</text><text>{escape(texto[:250])}</text>"
+           "</binding></visual></toast>")
+    script = (
+        "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications,"
+        " ContentType = WindowsRuntime] | Out-Null;"
+        "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument,"
+        " ContentType = WindowsRuntime] | Out-Null;"
+        "$x = New-Object Windows.Data.Xml.Dom.XmlDocument;"
+        f"$x.LoadXml(@'\n{xml}\n'@);"
+        "$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe';"
+        "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app)"
+        ".Show([Windows.UI.Notifications.ToastNotification]::new($x))"
+    )
+    try:
+        subprocess.run(["powershell", "-NoProfile", "-EncodedCommand",
+                        base64.b64encode(script.encode("utf-16-le")).decode()],
+                       timeout=30, capture_output=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def montar_resumo(enviadas: list[str], sem_whatsapp: list[str], puladas: list[str],
+                  verificacao: dict | None, pendentes: int, limite_dia: int,
+                  parada: str | None) -> str:
+    """Texto do resumo diário enviado para o próprio WhatsApp do operador."""
+    linhas = [f"Prospecção {datetime.now():%d/%m} — resumo automático", ""]
+    linhas.append(f"Enviadas: {len(enviadas)}"
+                  + (f" ({', '.join(enviadas)})" if enviadas else ""))
+    if verificacao:
+        linhas.append(f"Entregas conferidas hoje: {verificacao['conferidas']}")
+        for p in verificacao["problemas"]:
+            linhas.append(f"ATENÇÃO: {p}")
+        if verificacao["respostas"]:
+            linhas.append(f"Responderam (pessoa): {', '.join(verificacao['respostas'])}")
+        if verificacao["optouts"]:
+            linhas.append(f"Pediram para não contatar: {', '.join(verificacao['optouts'])}")
+        if verificacao["automaticas"]:
+            linhas.append(f"Só resposta automática: {', '.join(verificacao['automaticas'])}")
+    if sem_whatsapp:
+        linhas.append(f"Sem WhatsApp (removidos da fila): {len(sem_whatsapp)}")
+    if puladas:
+        linhas.append(f"Puladas: {len(puladas)}")
+    dias = pendentes // max(limite_dia, 1)
+    linhas.append(f"Fila: {pendentes} pendente(s) (~{dias} dia(s) útil(eis))")
+    if pendentes < 2 * limite_dia:
+        linhas.append("Fila acabando: rode o minerador com novos termos.")
+    if parada:
+        linhas.append(f"PARADA: {parada}")
+    return "\n".join(linhas)
+
+
+def _resumo_contato(numero: str) -> dict:
+    return {"clinica": "Resumo diário", "bairro": "", "cidade": CIDADE_PADRAO,
+            "telefone": normalizar_telefone(numero)}
+
+
+# --- Execução diária ----------------------------------------------------------
+
 def rodar_automatico(planilha: Planilha, args: argparse.Namespace,
                      mensagens: dict) -> int:
-    """Envia sozinho a cota do dia para pendentes com celular.
+    """Execução diária sem operador.
 
-    Para tudo (sem insistir) se: fora do dia útil/janela, WhatsApp
-    desconectado, envio sem confirmação na conversa, ou 2 falhas técnicas
-    seguidas. Números sem WhatsApp viram status 'sem_whatsapp'.
-    Retorna o número de mensagens enviadas.
+    1. Espera um atraso aleatório (não começa sempre no mesmo minuto).
+    2. Envia a cota do dia: celulares primeiro, depois fixos (número sem
+       WhatsApp é detectado sem enviar nada). Pula a mesma clínica com outro
+       número e nomes bloqueados.
+    3. Confere as entregas do dia e lê respostas (somente leitura).
+    4. Manda o resumo para o próprio WhatsApp (--resumo-para) e avisa no
+       Windows se algo deu errado ou se a fila está acabando.
+
+    Para tudo (sem insistir) se: WhatsApp desconectado, envio sem confirmação
+    na conversa ou 2 falhas técnicas seguidas. Retorna o número de envios.
     """
     agora = datetime.now()
     if not dia_util(agora):
         _registrar("[AUTO] Hoje não é dia útil (fim de semana/feriado) — nada a fazer.")
         return 0
-    if not dentro_da_janela(args.hora_inicio, args.hora_fim, agora):
+    atraso = random.randint(0, max(0, getattr(args, "atraso_max", 0)) * 60)
+    if atraso:
+        _registrar(f"[AUTO] Início em {atraso // 60} min {atraso % 60} s (horário variado).")
+        time.sleep(atraso)
+    if not dentro_da_janela(args.hora_inicio, args.hora_fim):
         _registrar(f"[AUTO] Fora da janela {args.hora_inicio}h–{args.hora_fim}h — nada a fazer.")
         return 0
 
@@ -1287,33 +1601,56 @@ def rodar_automatico(planilha: Planilha, args: argparse.Namespace,
         trava = TravaEnvio().__enter__()
     except EnvioEmAndamento as exc:
         _registrar(f"[AUTO] {exc}")
+        notificar_windows("Prospecção: não rodou", str(exc))
         return 0
 
-    enviados = 0
+    # Relê o CSV já com a trava: durante o atraso aleatório o minerador pode
+    # ter incluído contatos — salvar a versão antiga os apagaria.
+    recarregada = carregar_planilha(planilha.caminho)
+    planilha.linhas, planilha.contatos, planilha.colunas = (
+        recarregada.linhas, recarregada.contatos, recarregada.colunas)
+
+    enviadas: list[str] = []
+    sem_whatsapp: list[str] = []
+    puladas: list[str] = []
+    parada: str | None = None
+    verificacao: dict | None = None
     sessao = SessaoWeb()
     try:
         cota = args.limite_dia - envios_hoje()
-        fila = [c for c in planilha.contatos
-                if c["status"] == PENDENTE and eh_celular(c["telefone"])]
-        _registrar(f"[AUTO] Início: cota {max(cota, 0)}, {len(fila)} pendente(s) com celular.")
-        if cota <= 0 or not fila:
-            return 0
+        candidatos = [c for c in planilha.contatos if c["status"] == PENDENTE]
+        fila = sorted(candidatos, key=lambda c: not eh_celular(c["telefone"]))  # celulares 1º
+        contatadas = clinicas_ja_contatadas(planilha.contatos)
+        _registrar(f"[AUTO] Início: cota {max(cota, 0)}, {len(fila)} pendente(s) "
+                   f"({sum(eh_celular(c['telefone']) for c in fila)} celular(es)).")
 
         intervalo_alvo = random.randint(args.intervalo_min, args.intervalo_max)
         falhas_seguidas = 0
         for contato in fila:
-            if enviados >= cota:
+            if len(enviadas) >= cota:
                 break
             if not dentro_da_janela(args.hora_inicio, args.hora_fim):
                 _registrar("[AUTO] Janela de horário encerrou — parando.")
                 break
             if enviado_hoje(contato["telefone"]):
                 continue
+            nome = contato["clinica"][:50]
+            if nome_bloqueado(contato):
+                contato["status"] = STATUS_BLOQUEADO
+                planilha.salvar()
+                _registrar(f"[BLOQUEADO] {nome}: nome na lista de bloqueio.")
+                continue
+            if chave_clinica(contato) in contatadas:
+                contato["status"] = STATUS_MESMA_CLINICA
+                planilha.salvar()
+                _registrar(f"[MESMA CLÍNICA] {nome}: já contatada por outro número.")
+                continue
 
             mensagem = montar_texto(contato, mensagens)
             problema = validar_mensagem(mensagem, contato)
             if problema:
-                _registrar(f"[PULADO] {contato['clinica'][:50]}: {problema}")
+                puladas.append(nome)
+                _registrar(f"[PULADO] {nome}: {problema}")
                 continue
 
             restante = segundos_de_espera(ultimo_envio(), intervalo_alvo, datetime.now())
@@ -1322,47 +1659,83 @@ def rodar_automatico(planilha: Planilha, args: argparse.Namespace,
 
             ok = sessao.enviar(contato, mensagem, confirmar=False)
             if not ok and sessao.ultimo_erro == SessaoWeb.TEXTO_NAO_CONFERE:
-                _registrar(f"[RETENTATIVA] {contato['clinica'][:50]}: texto não conferiu")
+                _registrar(f"[RETENTATIVA] {nome}: texto não conferiu")
                 ok = sessao.enviar(contato, mensagem, confirmar=False)
 
             if ok:
                 atualizar_historico(contato, mensagem, "automatico", INICIAL)
                 marcar_enviado(contato, planilha, INICIAL)
-                enviados += 1
+                contatadas.add(chave_clinica(contato))
+                enviadas.append(nome_para_mensagem(contato["clinica"], contato.get("bairro", ""),
+                                                   contato.get("cidade") or CIDADE_PADRAO))
                 falhas_seguidas = 0
                 intervalo_alvo = random.randint(args.intervalo_min, args.intervalo_max)
                 if sessao.confirmado:
-                    _registrar(f"[ENVIADO] {contato['clinica'][:50]} (+{contato['telefone']})")
-                else:
-                    _registrar(f"[PARADO] {contato['clinica'][:50]}: ENTER dado mas a "
-                               "mensagem não foi conferida na conversa. Verifique "
-                               "manualmente antes do próximo envio.")
-                    break
-                continue
+                    _registrar(f"[ENVIADO] {nome} (+{contato['telefone']})")
+                    continue
+                parada = (f"mensagem para {nome} não foi conferida na conversa — "
+                          "verifique manualmente")
+                _registrar(f"[PARADO] {parada}")
+                break
 
             erro = sessao.ultimo_erro
             if erro == SessaoWeb.SEM_WHATSAPP:
                 contato["status"] = "sem_whatsapp"
                 contato["atualizado_em"] = datetime.now().isoformat(timespec="seconds")
                 planilha.salvar()
-                _registrar(f"[SEM WHATSAPP] {contato['clinica'][:50]} — removido da fila.")
+                sem_whatsapp.append(nome)
+                _registrar(f"[SEM WHATSAPP] {nome} — removido da fila.")
                 continue
             if erro == SessaoWeb.DESLOGADO:
-                _registrar("[PARADO] WhatsApp Web desconectado — abra o Chrome do "
-                           "script e escaneie o QR Code (rode --modo web uma vez).")
+                parada = "WhatsApp Web desconectado — rode: python prospeccao_whatsapp.py --conectar"
+                _registrar(f"[PARADO] {parada}")
                 break
             falhas_seguidas += 1
-            _registrar(f"[FALHA] {contato['clinica'][:50]}: {erro} "
-                       f"({falhas_seguidas} seguida(s))")
+            _registrar(f"[FALHA] {nome}: {erro} ({falhas_seguidas} seguida(s))")
             if falhas_seguidas >= 2:
-                _registrar("[PARADO] 2 falhas seguidas — interrompido por segurança.")
+                parada = "2 falhas técnicas seguidas — interrompido por segurança"
+                _registrar(f"[PARADO] {parada}")
                 break
+
+        # Leitura (sem digitar nada): entregas de hoje + respostas
+        if parada is None or "desconectado" not in parada:
+            try:
+                verificacao = verificar_conversas(planilha, sessao)
+                _registrar(f"[VERIFICAÇÃO] conferidas {verificacao['conferidas']}, "
+                           f"problemas {len(verificacao['problemas'])}, "
+                           f"respostas {len(verificacao['respostas'])}, "
+                           f"opt-out {len(verificacao['optouts'])}")
+                for p in verificacao["problemas"]:
+                    _registrar(f"[ATENÇÃO] {p}")
+                if verificacao["erro"]:
+                    parada = parada or verificacao["erro"]
+            except Exception as exc:  # noqa: BLE001
+                _registrar(f"[VERIFICAÇÃO] falhou: {exc}")
+
+        pendentes = sum(1 for c in planilha.contatos if c["status"] == PENDENTE)
+        resumo = montar_resumo(enviadas, sem_whatsapp, puladas, verificacao,
+                               pendentes, args.limite_dia, parada)
+        resumo_ok = False
+        destino = getattr(args, "resumo_para", None)
+        if destino and (parada is None or "desconectado" not in parada):
+            resumo_ok = sessao.enviar(_resumo_contato(destino), resumo,
+                                      permitir_reenvio=True, confirmar=False)
+            _registrar(f"[RESUMO] enviado para o seu WhatsApp: {resumo_ok}")
+
+        problemas = bool(parada) or bool(verificacao and verificacao["problemas"])
+        if problemas or (destino and not resumo_ok):
+            detalhe = (parada or "; ".join((verificacao or {}).get("problemas", []))
+                       or "o resumo no seu WhatsApp não foi enviado")
+            notificar_windows("Prospecção: atenção", detalhe)
+        elif pendentes < 2 * args.limite_dia:
+            notificar_windows("Prospecção: fila acabando",
+                              f"Restam {pendentes} pendentes. Rode o minerador.")
     finally:
         sessao.fechar()
         trava.__exit__(None, None, None)
-        _registrar(f"[AUTO] Fim: {enviados} enviada(s) hoje nesta execução; "
+        _registrar(f"[AUTO] Fim: {len(enviadas)} enviada(s) nesta execução; "
                    f"total do dia {envios_hoje()}/{args.limite_dia}.")
-    return enviados
+    return len(enviadas)
 
 
 # ---------------------------------------------------------------------------
@@ -1411,6 +1784,15 @@ def _criar_parser() -> argparse.ArgumentParser:
     parser.add_argument("--automatico", action="store_true",
                         help="Envio SEM operador (para o agendador): pendentes com "
                              "celular até --limite-dia, com todas as checagens")
+    parser.add_argument("--atraso-max", type=int, default=0,
+                        help="--automatico: começa após um atraso aleatório de 0 a N "
+                             "minutos (horário de início variado)")
+    parser.add_argument("--resumo-para", default=None,
+                        help="--automatico: telefone que recebe o resumo diário "
+                             "no WhatsApp (o seu próprio número)")
+    parser.add_argument("--verificar", action="store_true",
+                        help="Somente leitura: confere as entregas de hoje e lê as "
+                             "respostas das clínicas (atualiza o CSV)")
     parser.add_argument("--conectar", action="store_true",
                         help="Abre o WhatsApp Web do script para escanear o QR Code")
     parser.add_argument("--reset", action="store_true",
@@ -1442,6 +1824,26 @@ def main() -> None:
         return
     if args.conectar:
         conectar_whatsapp()
+        return
+    if args.verificar:
+        sessao = SessaoWeb()
+        try:
+            rel = verificar_conversas(planilha, sessao)
+        except EnvioEmAndamento as exc:
+            print(f"[BLOQUEADO] {exc}")
+            return
+        finally:
+            sessao.fechar()
+        print(f"\n[VERIFICAÇÃO] Entregas de hoje conferidas: {rel['conferidas']}")
+        for problema in rel["problemas"]:
+            print(f"  ATENÇÃO: {problema}")
+        for rotulo, chave in (("Responderam (pessoa)", "respostas"),
+                              ("Só resposta automática", "automaticas"),
+                              ("Opt-out (não contatar)", "optouts")):
+            if rel[chave]:
+                print(f"  {rotulo}: {', '.join(rel[chave])}")
+        if rel["erro"]:
+            print(f"  ERRO: {rel['erro']}")
         return
 
     if not contatos:

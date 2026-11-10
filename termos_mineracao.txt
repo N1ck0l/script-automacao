@@ -1,0 +1,16 @@
+# Termos usados pelo rodízio semanal do minerador (python minerador_maps.py --rodizio).
+# Um termo por linha; linhas com # são ignoradas. A cada execução usa o próximo.
+#
+# NÃO inclua clínicas de imagem/diagnóstico (concorrentes da PROIMAGEM) — o
+# nome PROIMAGEM também é bloqueado no envio.
+clinica odontologica em Aracaju SE
+dentista em Aracaju SE
+clinica medica em Aracaju SE
+ortodontista em Aracaju SE
+implante dentario em Aracaju SE
+clinica de fisioterapia em Aracaju SE
+dermatologista em Aracaju SE
+clinica de psicologia em Aracaju SE
+pediatra em Aracaju SE
+oftalmologista em Aracaju SE
+clinica de nutricao em Aracaju SE

@@ -453,7 +453,37 @@ def minerar(termo: str, max_alvos: int = 40, cidade: str = CIDADE_PADRAO,
 
 
 # ---------------------------------------------------------------------------
-# 5. CLI
+# 5. RODÍZIO SEMANAL DE TERMOS (agendado)
+# ---------------------------------------------------------------------------
+
+ARQUIVO_TERMOS = BASE_DIR / "termos_mineracao.txt"
+ARQUIVO_RODIZIO = BASE_DIR / ".rodizio_mineracao"
+
+
+def ler_termos(caminho: Path = ARQUIVO_TERMOS) -> list[str]:
+    """Termos do arquivo (um por linha; '#' = comentário)."""
+    if not Path(caminho).exists():
+        return []
+    return [linha.strip() for linha in Path(caminho).read_text(encoding="utf-8").splitlines()
+            if linha.strip() and not linha.strip().startswith("#")]
+
+
+def proximo_termo(termos: list[str], estado: Path = ARQUIVO_RODIZIO) -> tuple[str, int]:
+    """Próximo termo do rodízio e seu índice (volta ao início no fim da lista)."""
+    try:
+        indice = int(Path(estado).read_text(encoding="utf-8").strip() or 0)
+    except (OSError, ValueError):
+        indice = 0
+    indice %= len(termos)
+    return termos[indice], indice
+
+
+def avancar_rodizio(indice: int, estado: Path = ARQUIVO_RODIZIO) -> None:
+    Path(estado).write_text(str(indice + 1), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# 6. CLI
 # ---------------------------------------------------------------------------
 
 
@@ -481,14 +511,30 @@ def main() -> None:
                              "que quase sempre têm WhatsApp)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Mostra o resultado sem gravar no CSV")
+    parser.add_argument("--rodizio", action="store_true",
+                        help="Usa o próximo termo de termos_mineracao.txt (agendamento "
+                             "semanal); inclui fixos — o envio detecta quem tem WhatsApp")
     args = parser.parse_args()
 
     if args.delay_min > args.delay_max:
         parser.error("--delay-min não pode ser maior que --delay-max")
 
+    indice_rodizio = None
+    if args.rodizio:
+        termos = ler_termos()
+        if not termos:
+            print(f"[ERRO] Nenhum termo em {ARQUIVO_TERMOS.name}.")
+            sys.exit(1)
+        args.termo, indice_rodizio = proximo_termo(termos)
+        args.incluir_fixos = True
+        print(f"[RODÍZIO] Termo {indice_rodizio + 1}/{len(termos)}: {args.termo}")
+
     registros = minerar(args.termo, max_alvos=args.max, cidade=args.cidade,
                         visivel=args.visivel, incluir_fixos=args.incluir_fixos,
                         delay_min=args.delay_min, delay_max=args.delay_max)
+
+    if indice_rodizio is not None and not args.dry_run:
+        avancar_rodizio(indice_rodizio)  # avança mesmo sem resultado (não trava num termo)
 
     if not registros:
         print("\n[NADA] Nenhum registro coletado.")
@@ -503,7 +549,13 @@ def main() -> None:
         return
 
     caminho = Path(args.saida)
-    inseridos, pulados = integrar_csv(registros, caminho)
+    try:
+        # Mesma trava do envio: nunca grava o CSV enquanto um envio o usa.
+        with pw.TravaEnvio():
+            inseridos, pulados = integrar_csv(registros, caminho)
+    except pw.EnvioEmAndamento as exc:
+        print(f"[BLOQUEADO] {exc} Rode o minerador de novo depois.")
+        sys.exit(1)
     print(f"\n[CSV] {inseridos} novo(s) salvo(s) em {caminho.name}; "
           f"{pulados} duplicado(s) já existente(s) ignorado(s) "
           "(chave: telefone).")

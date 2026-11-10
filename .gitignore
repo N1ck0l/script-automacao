@@ -9,3 +9,4 @@ __pycache__/
 *.csv.tmp
 .envio.lock
 logs/
+.rodizio_mineracao
