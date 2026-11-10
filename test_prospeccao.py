@@ -213,7 +213,9 @@ class TestMensagem(unittest.TestCase):
             self.assertIn("Aracaju", texto)
             self.assertNotIn("{", texto)
             self.assertNotIn("}", texto)
-            self.assertIn("PROIMAGEM", texto)  # case real sempre presente
+            self.assertNotIn("PROIMAGEM", texto)  # empregador nunca citado
+            self.assertNotIn("prévia", texto)     # CTA é só agendar reunião
+            self.assertIn("NF-e", texto)          # case sempre presente
 
     def test_varia_entre_geracoes(self):
         gerados = {pw.montar_texto(self.CONTATO) for _ in range(50)}
