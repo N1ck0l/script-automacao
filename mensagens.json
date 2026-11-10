@@ -1,5 +1,5 @@
 {
-  "_ajuda": "Textos da prospecção. Tokens: {clinica} {bairro} {cidade} {local} {saudacao} {gancho} {autoridade} {case} {cta}. Spintax: {opção A|opção B}. {local} vira 'no <bairro>' ou, sem bairro, 'em <cidade>'.",
+  "_ajuda": "Textos da prospecção. Tokens: {clinica} {a_clinica} {da_clinica} {bairro} {cidade} {local} {saudacao} {gancho} {autoridade} {case} {cta}. Spintax: {opção A|opção B}. {local} vira 'no <bairro>' ou, sem bairro, 'em <cidade>'.",
 
   "saudacoes": {
     "manha": ["Bom dia! Tudo bem?", "Bom dia, tudo bem?"],
@@ -14,8 +14,8 @@
   ],
 
   "ganchos": [
-    "Acompanho o trabalho da {clinica} {local} e sei que manter a recepção ágil com alto volume de pacientes é um desafio diário.",
-    "Tenho acompanhado o trabalho da {clinica} {local} e sei que manter a recepção ágil com alto volume de pacientes é um desafio diário."
+    "Acompanho o trabalho {da_clinica} {local} e sei que manter a recepção ágil com alto volume de pacientes é um desafio diário.",
+    "Tenho acompanhado o trabalho {da_clinica} {local} e sei que manter a recepção ágil com alto volume de pacientes é um desafio diário."
   ],
 
   "cases": [
@@ -36,7 +36,7 @@
   ],
 
   "followups": [
-    "{saudacao} Passando para retomar minha mensagem sobre as automações para a {clinica}. {Faz sentido|Vale a pena} alinharmos uma conversa rápida de 10 minutos (online ou presencial) com o responsável pela gestão?",
-    "{saudacao} Só para minha mensagem não se perder: consigo alinhar 10 minutos (online ou presencial) com o responsável pela gestão da {clinica} para demonstrar como as automações rodariam aí?"
+    "{saudacao} Passando para retomar minha mensagem sobre as automações para {a_clinica}. {Faz sentido|Vale a pena} alinharmos uma conversa rápida de 10 minutos (online ou presencial) com o responsável pela gestão?",
+    "{saudacao} Só para minha mensagem não se perder: consigo alinhar 10 minutos (online ou presencial) com o responsável pela gestão {da_clinica} para demonstrar como as automações rodariam aí?"
   ]
 }

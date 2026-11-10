@@ -7,3 +7,4 @@ __pycache__/
 # Runtime do projeto (dados de sessão, não do código)
 .perfil_whatsapp_web/
 *.csv.tmp
+.envio.lock

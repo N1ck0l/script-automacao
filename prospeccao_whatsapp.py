@@ -274,11 +274,71 @@ def escolher_saudacao(mensagens: dict, agora: datetime | None = None) -> str:
     return random.choice(opcoes) if opcoes else "Olá, tudo bem?"
 
 
+def nome_para_mensagem(clinica: str, bairro: str = "", cidade: str = "") -> str:
+    """Limpa o nome vindo do Google Maps para soar humano na mensagem.
+
+    "MB Odontologia | Dentista | Urgência" -> "MB Odontologia"
+    "Odonto Center - Dentista"             -> "Odonto Center"
+    "Dra. Fulana (Periodontista)."         -> "Dra. Fulana"
+    "Sorridents Clínicas Jardins Aracaju"  -> "Sorridents Clínicas" (SEO "<bairro> <cidade>")
+    "Clínica São José" (bairro São José)   -> inalterado (o bairro faz parte do nome)
+    """
+    original = (clinica or "").strip()
+    partes = re.split(r"\s+[|–—-]\s+|\s*\|\s*", original)
+    # Primeiro trecho com pelo menos 2 letras ("01 - Odonto10x" -> "Odonto10x")
+    nome = next((p for p in partes if len(re.findall(r"[^\W\d_]", p)) >= 2),
+                partes[0])
+    nome = re.sub(r"\s*\([^)]*\)?", "", nome)
+    # "Clínica Bem Viver. Consultas e Exames" -> corta no ponto final de frase
+    # (mas não em abreviações curtas como "Dra. " / "Dr. ")
+    nome = re.split(r"(?<=[^\W\d_]{4})\.\s+", nome)[0]
+    nome = nome.split(", ")[0]  # "Dr. Fulano, Médico clínico geral"
+    nome = re.sub(r"\s+(?:ltda|me|eireli|s/?a)\.?$", "", nome, flags=re.IGNORECASE)
+    nome = nome.strip(" .,;:-")
+    if nome.isupper() and len(nome) > 4:  # "CENTRO MEDICO JARDINS"
+        pequenas = {"de", "do", "da", "dos", "das", "e", "em"}
+        nome = " ".join(p.lower() if i and p.lower() in pequenas else p.capitalize()
+                        for i, p in enumerate(nome.split()))
+    if cidade:  # "... Consultório Odontológico em Aracaju" -> sem "em Aracaju"
+        nome = re.sub(rf"\s+(?:em|de|-)\s+{re.escape(cidade)}$", "", nome,
+                      flags=re.IGNORECASE)
+
+    def sem_final(texto: str, final: str) -> str | None:
+        """Remove `final` do fim se sobrarem 2+ palavras; senão None."""
+        final = (final or "").strip()
+        if not final or not texto.lower().endswith(" " + final.lower()):
+            return None
+        resto = texto[: -len(final)].strip(" .,;:-")
+        return resto if len(resto.split()) >= 2 else None
+
+    # Só trata como SEO quando a cidade está no fim; o bairro sai apenas se
+    # vier logo antes dela ("... Jardins Aracaju").
+    sem_cidade = sem_final(nome, cidade)
+    if sem_cidade:
+        nome = sem_final(sem_cidade, bairro) or sem_cidade
+    return nome or original
+
+
+INICIOS_MASCULINOS = ("dr ", "dr. ", "grupo ", "centro ", "instituto ",
+                      "consultório ", "consultorio ", "hospital ", "espaço ",
+                      "espaco ", "núcleo ", "nucleo ", "complexo ",
+                      "laboratório ", "laboratorio ", "dentista ")
+
+
+def artigo(nome: str) -> str:
+    """'o' para nomes masculinos (Dr., Grupo, Centro...); 'a' (clínica) no resto."""
+    return "o" if nome.lower().startswith(INICIOS_MASCULINOS) else "a"
+
+
 def _contexto(contato: dict, mensagens: dict, agora: datetime | None) -> dict:
     bairro = (contato.get("bairro") or "").strip()
     cidade = (contato.get("cidade") or "").strip() or CIDADE_PADRAO
+    nome = nome_para_mensagem(contato["clinica"], bairro, cidade)
+    art = artigo(nome)
     return {
-        "clinica": contato["clinica"],
+        "clinica": nome,
+        "a_clinica": f"{art} {nome}",                       # "a Ferraz" / "o Dr. X"
+        "da_clinica": f"{'do' if art == 'o' else 'da'} {nome}",
         "bairro": bairro,
         "cidade": cidade,
         # Sem bairro, "no {bairro}" viraria "no  e sei..." — cai para a cidade.
@@ -441,6 +501,84 @@ def reabrir_fila(contatos: list[dict]) -> int:
     return reabertos
 
 
+ARQUIVO_TRAVA = BASE_DIR / ".envio.lock"
+_TRAVA_PROFUNDIDADE = 0  # reentrância dentro do mesmo processo
+
+
+def _processo_vivo(pid: int) -> bool:
+    """True se o PID existe. (No Windows, os.kill(pid, 0) MATARIA o processo.)"""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            codigo = ctypes.c_ulong()
+            kernel32.GetExitCodeProcess(handle, ctypes.byref(codigo))
+            return codigo.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    import os
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+class EnvioEmAndamento(RuntimeError):
+    """Outro processo já está enviando (ou usando o perfil do WhatsApp Web)."""
+
+
+class TravaEnvio:
+    """Garante UM único processo enviando por vez (arquivo .envio.lock com o PID).
+
+    Reentrante no mesmo processo; trava de processo morto é descartada.
+    """
+
+    def __init__(self, caminho: Path | None = None) -> None:
+        self.caminho = Path(caminho or ARQUIVO_TRAVA)
+
+    def __enter__(self) -> "TravaEnvio":
+        import os
+        global _TRAVA_PROFUNDIDADE
+        if _TRAVA_PROFUNDIDADE:
+            _TRAVA_PROFUNDIDADE += 1
+            return self
+        for _ in range(2):
+            try:
+                fd = os.open(self.caminho, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    dono = int(self.caminho.read_text(encoding="utf-8").strip() or 0)
+                except (OSError, ValueError):
+                    dono = 0
+                if dono and dono != os.getpid() and _processo_vivo(dono):
+                    raise EnvioEmAndamento(
+                        f"Outro envio está em andamento (processo {dono}). Aguarde "
+                        f"ele terminar ou feche-o; se tiver certeza de que não há "
+                        f"nenhum, apague {self.caminho.name}.")
+                self.caminho.unlink(missing_ok=True)  # trava órfã
+                continue
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(str(os.getpid()))
+            _TRAVA_PROFUNDIDADE = 1
+            return self
+        raise EnvioEmAndamento(f"Não foi possível criar {self.caminho.name}.")
+
+    def __exit__(self, *_exc) -> None:
+        global _TRAVA_PROFUNDIDADE
+        _TRAVA_PROFUNDIDADE -= 1
+        if _TRAVA_PROFUNDIDADE <= 0:
+            _TRAVA_PROFUNDIDADE = 0
+            self.caminho.unlink(missing_ok=True)
+
+
 def verificar_limite_diario(limite: int) -> bool:
     usados = envios_hoje()
     print(f"[LIMITE DIÁRIO] {usados}/{limite} mensagens enviadas hoje.")
@@ -519,6 +657,17 @@ def enviar_modo_manual(contato: dict, mensagem: str) -> bool:
     return True
 
 
+def texto_confere(texto_na_caixa: str, mensagem: str) -> bool:
+    """A caixa contém exatamente a mensagem (nem a mais, nem a menos)?
+
+    Compara só letras e números: o WhatsApp Web renderiza emoji como imagem
+    e pode mexer em espaços/quebras, mas texto duplicado ou faltando aparece.
+    """
+    def nucleo(s: str) -> str:
+        return re.sub(r"[\W_]+", "", s or "").lower()
+    return bool(nucleo(mensagem)) and nucleo(texto_na_caixa) == nucleo(mensagem)
+
+
 class SessaoWeb:
     """WhatsApp Web via Selenium, com UM navegador reaproveitado na sessão.
 
@@ -534,9 +683,15 @@ class SessaoWeb:
 
     def __init__(self) -> None:
         self.driver = None
+        self._trava: TravaEnvio | None = None
 
     def _garantir_driver(self):
         if self.driver is None:
+            # O perfil do WhatsApp Web só pode ser usado por um processo por vez.
+            if self._trava is None:
+                trava = TravaEnvio()
+                trava.__enter__()  # levanta EnvioEmAndamento se já houver outro
+                self._trava = trava
             from selenium import webdriver
             opcoes = webdriver.ChromeOptions()
             opcoes.add_argument("--start-maximized")
@@ -546,7 +701,14 @@ class SessaoWeb:
                   "acelera nas próximas vezes)...")
         return self.driver
 
-    def enviar(self, contato: dict, mensagem: str) -> bool:
+    def enviar(self, contato: dict, mensagem: str,
+               permitir_reenvio: bool = False) -> bool:
+        """Prepara e envia UMA mensagem. Sem `permitir_reenvio`, recusa números
+        que já receberam hoje — conferido de novo no último instante."""
+        if not permitir_reenvio and enviado_hoje(contato["telefone"]):
+            print(f"[BLOQUEADO] +{contato['telefone']} já recebeu mensagem hoje "
+                  "— envio duplicado evitado.")
+            return False
         _cabecalho_alvo(contato)
         print("=" * 64)
         if input("\nPreparar o envio no WhatsApp Web (Selenium)? [s/N]: "
@@ -563,24 +725,32 @@ class SessaoWeb:
         except ImportError:
             print("[ERRO] Selenium não instalado. Rode: pip install -r requirements.txt")
             return False
+        except EnvioEmAndamento as exc:
+            print(f"[BLOQUEADO] {exc}")
+            return False
         except Exception as exc:  # noqa: BLE001
             print(f"[ERRO] Não foi possível abrir o Chrome: {exc}")
+            self.fechar()
             return False
 
         try:
             driver.get(montar_link(contato, mensagem))
             caixa = WebDriverWait(driver, 60).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, self.SELETOR_CAIXA)))
-            time.sleep(2)
-
-            if not caixa.text.strip():
-                # Pré-preenchimento falhou: insere via JS (aceita emoji).
-                caixa.click()
-                driver.execute_script(
-                    "arguments[0].focus();"
-                    "document.execCommand('insertText', false, arguments[1]);",
-                    caixa, mensagem)
-                time.sleep(1)
+            # Espera o WhatsApp terminar de preencher a caixa com o texto do link.
+            # NUNCA digitamos/colamos por cima: isso já duplicou mensagens
+            # (cópia sem quebras de linha misturada ao texto original).
+            confere = False
+            for _ in range(40):  # até ~20s
+                time.sleep(0.5)
+                if texto_confere(caixa.get_attribute("innerText") or "", mensagem):
+                    confere = True
+                    break
+            if not confere:
+                print("[ERRO] O texto na caixa não confere com a mensagem aprovada "
+                      "(faltando ou duplicado) — NADA foi enviado.")
+                self._limpar_caixa(caixa)
+                return False
 
             print("\n" + "=" * 64)
             print("MENSAGEM NA CAIXA DA CONVERSA, MAS *NÃO* ENVIADA.")
@@ -588,8 +758,20 @@ class SessaoWeb:
             print("=" * 64)
             if input("ENVIAR AGORA? Digite 'ENVIAR' (ou qualquer outra coisa "
                      "para abortar): ").strip() != "ENVIAR":
-                print("[SKIP] Envio abortado pelo operador (nada foi enviado). "
-                      "Apague o rascunho no WhatsApp Web se quiser.")
+                print("[SKIP] Envio abortado pelo operador (nada foi enviado).")
+                self._limpar_caixa(caixa)
+                return False
+
+            # Última conferência: alguém pode ter enviado enquanto revisávamos.
+            if not permitir_reenvio and enviado_hoje(contato["telefone"]):
+                print("[BLOQUEADO] Este número recebeu mensagem durante a revisão "
+                      "— envio duplicado evitado.")
+                self._limpar_caixa(caixa)
+                return False
+            # ...e o texto ainda é exatamente o aprovado?
+            if not texto_confere(caixa.get_attribute("innerText") or "", mensagem):
+                print("[ERRO] O texto na caixa mudou desde a revisão — NADA foi enviado.")
+                self._limpar_caixa(caixa)
                 return False
 
             caixa.send_keys(Keys.ENTER)
@@ -603,6 +785,18 @@ class SessaoWeb:
             self.fechar()  # navegador pode ter sido fechado; reabre no próximo
             return False
 
+    @staticmethod
+    def _limpar_caixa(caixa) -> None:
+        """Apaga o rascunho para não sobrar texto na conversa (nem misturar
+        com o próximo envio para o mesmo número)."""
+        try:
+            from selenium.webdriver.common.keys import Keys
+            caixa.click()
+            caixa.send_keys(Keys.CONTROL, "a")
+            caixa.send_keys(Keys.DELETE)
+        except Exception:  # noqa: BLE001
+            print("[AVISO] Não consegui limpar o rascunho — apague-o no WhatsApp Web.")
+
     def fechar(self) -> None:
         if self.driver is not None:
             try:
@@ -610,6 +804,9 @@ class SessaoWeb:
             except Exception:  # noqa: BLE001
                 pass
             self.driver = None
+        if self._trava is not None:
+            self._trava.__exit__(None, None, None)
+            self._trava = None
 
 
 # ---------------------------------------------------------------------------
@@ -715,7 +912,16 @@ def rodar_fila(fila: list[dict], planilha: Planilha, args: argparse.Namespace,
 
     gerar = montar_texto_followup if tipo == FOLLOWUP else montar_texto
     intervalo_alvo = random.randint(args.intervalo_min, args.intervalo_max)
+    # Um único processo enviando por vez (evita mensagens duplicadas).
+    trava = TravaEnvio() if modo != "preview" else None
+    if trava is not None:
+        try:
+            trava.__enter__()
+        except EnvioEmAndamento as exc:
+            print(f"\n[BLOQUEADO] {exc}")
+            return
     sessao_web = SessaoWeb() if modo == "web" else None
+    reenvio_autorizado: set[str] = set()
 
     try:
         indice = inicio
@@ -738,6 +944,7 @@ def rodar_fila(fila: list[dict], planilha: Planilha, args: argparse.Namespace,
                               "na fila para os próximos dias.")
                         indice += 1
                         continue
+                    reenvio_autorizado.add(contato["telefone"])
 
                 # Intervalo mínimo desde o ÚLTIMO ENVIO real (pular ou pedir
                 # nova variação não reinicia a espera).
@@ -794,7 +1001,9 @@ def rodar_fila(fila: list[dict], planilha: Planilha, args: argparse.Namespace,
                 break
 
             if sessao_web is not None:
-                sucesso = sessao_web.enviar(contato, mensagem)
+                sucesso = sessao_web.enviar(
+                    contato, mensagem,
+                    permitir_reenvio=contato["telefone"] in reenvio_autorizado)
             else:
                 sucesso = enviar_modo_manual(contato, mensagem)
 
@@ -812,6 +1021,8 @@ def rodar_fila(fila: list[dict], planilha: Planilha, args: argparse.Namespace,
     finally:
         if sessao_web is not None:
             sessao_web.fechar()
+        if trava is not None:
+            trava.__exit__(None, None, None)
 
     print(f"\n[FIM] Sessão encerrada. Progresso salvo em "
           f"{planilha.caminho.name} e {ARQUIVO_LOG.name}.")

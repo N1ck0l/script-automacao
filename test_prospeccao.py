@@ -186,6 +186,48 @@ class TestMensagem(unittest.TestCase):
             self.assertNotIn("Boa tarde", manha)
             self.assertNotIn("Bom dia", tarde)
 
+    def test_nome_para_mensagem_limpa_seo_do_maps(self):
+        casos = {
+            ("MB Odontologia | Dentista | Urgência Odontológica | Aracaju",
+             "Salgado Filho"): "MB Odontologia",
+            ("Odonto Center - Dentista", ""): "Odonto Center",
+            ("Dra. Mairaira Leão (Periodontista e Implantodontista).",
+             "São José"): "Dra. Mairaira Leão",
+            ("Sorridents Clínicas Odontológicas Jardins Aracaju",
+             "Jardins"): "Sorridents Clínicas Odontológicas",
+            ("Clínica São José", "São José"): "Clínica São José",
+            ("Clínica Odontológica São José", "São José"):
+                "Clínica Odontológica São José",
+            ("Odonto Aracaju", ""): "Odonto Aracaju",
+            ("Ferraz Odontologia", "São José"): "Ferraz Odontologia",
+            ("Centro-Oeste Odonto", ""): "Centro-Oeste Odonto",  # hífen sem espaço
+            ("01 - Odonto10x | Clínica Odontológica", ""): "Odonto10x",
+            ("Duo Odontologia Consultório Odontológico em Aracaju", ""):
+                "Duo Odontologia Consultório Odontológico",
+            ("Clínica Bem Viver. Consultas e Exames - Ultrassom", ""):
+                "Clínica Bem Viver",
+            ("Dr. Daniel Campos (Odontologia 24hrs)", ""): "Dr. Daniel Campos",
+            ("Dr. Jose Luiz Sandes, Médico clínico geral", ""): "Dr. Jose Luiz Sandes",
+            ("CENTRO MÉDICO DO TRABALHADOR LTDA", ""): "Centro Médico do Trabalhador",
+            ("COS - Clínica de Odontologia", ""): "COS",  # sigla curta preservada
+        }
+        for (nome, bairro), esperado in casos.items():
+            self.assertEqual(pw.nome_para_mensagem(nome, bairro, "Aracaju"),
+                             esperado, nome)
+
+    def test_concordancia_do_da(self):
+        for nome, esperado in [("Dr. Daniel Campos", "do Dr. Daniel Campos"),
+                               ("Grupo Santa Helena", "do Grupo Santa Helena"),
+                               ("Ferraz Odontologia", "da Ferraz Odontologia"),
+                               ("Dra. Mairaira Leão", "da Dra. Mairaira Leão")]:
+            contato = {"clinica": nome, "bairro": "Centro", "cidade": "Aracaju"}
+            for _ in range(10):
+                self.assertIn(f"trabalho {esperado}", pw.montar_texto(contato))
+
+    def test_nome_nunca_fica_vazio(self):
+        self.assertEqual(pw.nome_para_mensagem("Aracaju", "", "Aracaju"), "Aracaju")
+        self.assertEqual(pw.nome_para_mensagem("(Clínica)", ""), "(Clínica)")
+
     def test_periodo_do_dia(self):
         self.assertEqual(pw.periodo_do_dia(8), "manha")
         self.assertEqual(pw.periodo_do_dia(12), "tarde")
@@ -387,6 +429,79 @@ class TestFollowup(unittest.TestCase):
     def test_csv_antigo_usa_atualizado_em(self):
         c = _contato(status="enviado", atualizado_em="2026-01-01T10:00:00")
         self.assertTrue(pw.precisa_followup(c, 3, 1, self.AGORA))
+
+
+class TestTravaEnvio(BasePw):
+    """Impede dois processos enviando ao mesmo tempo (causa de duplicatas)."""
+
+    def setUp(self):
+        super().setUp()
+        self.trava = self.tmpdir / ".envio.lock"
+
+    def test_bloqueia_quando_outro_processo_vivo_tem_a_trava(self):
+        import subprocess
+        import sys as _sys
+        outro = subprocess.Popen([_sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            self.trava.write_text(str(outro.pid), encoding="utf-8")
+            with self.assertRaises(pw.EnvioEmAndamento):
+                with pw.TravaEnvio(self.trava):
+                    pass
+            self.assertTrue(self.trava.exists())  # trava alheia preservada
+        finally:
+            outro.kill()
+            outro.wait()
+
+    def test_trava_orfa_de_processo_morto_e_descartada(self):
+        self.trava.write_text("999999", encoding="utf-8")
+        with pw.TravaEnvio(self.trava):
+            import os
+            self.assertEqual(self.trava.read_text(encoding="utf-8"), str(os.getpid()))
+        self.assertFalse(self.trava.exists())  # liberada ao sair
+
+    def test_reentrante_no_mesmo_processo(self):
+        with pw.TravaEnvio(self.trava):
+            with pw.TravaEnvio(self.trava):
+                self.assertTrue(self.trava.exists())
+            self.assertTrue(self.trava.exists())  # só libera no nível externo
+        self.assertFalse(self.trava.exists())
+
+    def test_sessao_web_recusa_numero_que_ja_recebeu_hoje(self):
+        hoje = datetime.now().isoformat(timespec="seconds")
+        pw.ARQUIVO_LOG.write_text('{"timestamp": "%s", "telefone": "5579991111111"}\n'
+                                  % hoje, encoding="utf-8")
+        sessao = pw.SessaoWeb()
+        with redirect_stdout(io.StringIO()) as saida:
+            ok = sessao.enviar(_contato(telefone="5579991111111"), "oi")
+        self.assertFalse(ok)
+        self.assertIn("duplicado evitado", saida.getvalue())
+        self.assertIsNone(sessao.driver)  # nem abriu o navegador
+
+
+class TestTextoConfere(unittest.TestCase):
+    """Só envia se a caixa do WhatsApp contém EXATAMENTE a mensagem aprovada."""
+
+    MSG = ("Bom dia! Tudo bem?\n\nSou o Nickolas.\n\n"
+           "• Triagem no WhatsApp;\n• NF-e em minutos.\n\nQuem seria o contato? 😊")
+
+    def test_mesmo_texto_com_quebras_e_emoji_renderizados_diferente(self):
+        caixa = ("Bom dia! Tudo bem?\nSou o Nickolas.\n"
+                 "Triagem no WhatsApp;\nNF-e em minutos.\nQuem seria o contato?")
+        self.assertTrue(pw.texto_confere(caixa, self.MSG))
+
+    def test_texto_duplicado_e_recusado(self):
+        # O bug real: cópia sem quebras de linha misturada ao texto original
+        achatado = self.MSG.replace("\n", "")
+        caixa = "Bom dia! Tudo bem?\n" + achatado + "\n" + self.MSG.split("\n", 2)[2]
+        self.assertFalse(pw.texto_confere(caixa, self.MSG))
+
+    def test_texto_incompleto_ou_vazio_e_recusado(self):
+        self.assertFalse(pw.texto_confere("Bom dia! Tudo bem?", self.MSG))
+        self.assertFalse(pw.texto_confere("", self.MSG))
+        self.assertFalse(pw.texto_confere("", ""))
+
+    def test_rascunho_antigo_somado_e_recusado(self):
+        self.assertFalse(pw.texto_confere("oi " + self.MSG, self.MSG))
 
 
 class TestReset(unittest.TestCase):
