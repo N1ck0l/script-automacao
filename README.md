@@ -14,7 +14,7 @@ banimento de chip pela Meta.
 | `mensagens.json` | Textos da abordagem e do follow-up (spintax + tokens) — edite aqui, não no código |
 | `minerador_maps.py` | Minerador de empresas no Google Maps (Playwright) → `prospeccao.csv` |
 | `prospeccao.csv` | Contatos (`clinica,bairro,cidade,telefone,site,avaliacoes,status,resposta,atualizado_em,ultimo_envio,followups`) |
-| `test_prospeccao.py` + `test_minerador.py` | 111 testes do núcleo anti-ban, do modo automático e da mineração (unittest, zero dependências) |
+| `test_prospeccao.py` + `test_minerador.py` | 139 testes do núcleo anti-ban, do modo automático e da mineração (unittest, zero dependências) |
 | `logs/` | Log diário do modo automático (`automatico_AAAA-MM-DD.log`) |
 | `termos_mineracao.txt` | Termos do rodízio semanal do minerador |
 | `historico_envios.jsonl` | Auditoria: todo envio confirmado é registrado aqui |
@@ -114,6 +114,8 @@ Requisitos: Python 3.10+. O modo `manual` (padrão) não precisa de nada instala
 - `ganchos`, `autoridades`, `cases`, `ctas`: uma opção de cada é sorteada.
 - `estruturas`: como as partes são montadas (`{saudacao}`, `{gancho}`, ...).
 - `followups`: mensagens curtas de retomada.
+- `aberturas`: variante curta do teste A/B; `estruturas_apresentacao` + `ctas_apresentacao`: 2ª etapa, enviada quando uma pessoa responde.
+- Token `{nota}`: nota do Google (só existe se ≥ 4,5; textos com `{nota}` são usados só nesses casos).
 - Tokens: `{clinica}`, `{bairro}`, `{cidade}` e `{local}` — que vira
   `no <bairro>` ou, quando o bairro está vazio, `em <cidade>`.
 - Spintax em qualquer texto: `{Faz sentido|Vale a pena}`.
@@ -170,20 +172,61 @@ python prospeccao_whatsapp.py --listar      # vê a coluna RESPOSTA na tabela
 python prospeccao_whatsapp.py --automatico --limite-dia 10 --atraso-max 40 --resumo-para 5579981677954
 ```
 
-Envia **sem operador** para os contatos `pendente` — **celulares primeiro,
-depois fixos** (número sem WhatsApp é detectado sem enviar nada e vira
-`sem_whatsapp`) — até a cota do dia. Depois, confere as entregas do dia, lê as
-respostas e manda um **resumo para o seu WhatsApp** (`--resumo-para`). Começa
-num horário sorteado de 0 a `--atraso-max` minutos após o agendamento.
+Envia **sem operador**, até a cota do dia (10, somando follow-ups e
+apresentações):
+1. **Follow-ups**: quem recebeu há **2 dias úteis** e não respondeu (ou só o
+   robô respondeu) — no máximo 1 por clínica.
+2. **Novos contatos** `pendente` — **celulares primeiro, depois fixos** (número
+   sem WhatsApp é detectado sem enviar nada e vira `sem_whatsapp`).
+3. Confere as entregas, lê as respostas, executa as ações automáticas (abaixo)
+   e manda um **resumo para o seu WhatsApp** (`--resumo-para`).
+
+Começa às **10h30** + um atraso sorteado de 0 a `--atraso-max` minutos (fora do
+pico da recepção, que é logo cedo).
+
+**Teste A/B** (coluna `variante`, fixa por número, metade para cada lado):
+- `curta`: uma pergunta simples para a recepção ("Quem cuida da parte de
+  gestão aí?"). Quando uma **pessoa** responde, o script envia sozinho a
+  **apresentação** (`estruturas_apresentacao`) e a coluna `etapa` vira
+  `apresentacao`;
+- `completa`: a mensagem completa de sempre.
+O resumo diário mostra quantas responderam em cada variante.
+
+**Personalização**: com nota no Google ≥ 4,5, alguns textos elogiam a nota
+("Vi as 4,9 estrelas da MB Odontologia no Google").
 
 Nunca recebem mensagem automática:
 - a **mesma clínica** por outro número (nome limpo igual → `mesma_clinica`);
 - nomes da lista de bloqueio (`BLOQUEIO_NOMES`, inclui PROIMAGEM → `bloqueado`);
 - nomes **genéricos** sem a marca ("Implantes Dentários", "Dentista 24Horas"):
-  ficam pendentes e aparecem como "pulados" — corrija o nome no CSV. Agendado no Agendador de Tarefas do Windows como **"Prospeccao
-WhatsApp"**: segunda a sexta, 9h (se o PC estiver desligado às 9h, roda quando
-ligar — dentro da janela 8h–19h). O PC precisa estar ligado e com o usuário
-logado; o login do WhatsApp Web fica salvo em `.perfil_whatsapp_web/`.
+  ficam pendentes e aparecem como "pulados" — corrija o nome no CSV.
+
+### Acompanhamento ao longo do dia
+
+```bash
+python prospeccao_whatsapp.py --acompanhar --limite-dia 10 --resumo-para 5579981677954
+```
+
+Agendado como **"Prospeccao Acompanhamento"** às 12h, 14h, 16h e 18h (dias
+úteis). Não prospecta ninguém novo; só:
+- **avisa na hora** (seu WhatsApp + Windows) quando uma **pessoa** responde,
+  com o trecho da resposta — para você assumir a conversa rápido;
+- envia a **apresentação** da variante curta para quem respondeu;
+- em robôs com menu, escolhe a opção **"falar com atendente"** (uma vez por
+  clínica; não conta no limite diário);
+- marca `nao_contatar` quem pedir para não ser contatado.
+
+### Agendamento
+
+| Tarefa | Quando |
+|---|---|
+| "Prospeccao WhatsApp" | Seg–sex, 10h30 (+0 a 40 min) |
+| "Prospeccao Acompanhamento" | Seg–sex, 12h, 14h, 16h, 18h |
+| "Prospeccao Minerador" | Segundas, 7h30 |
+
+Se o PC estiver desligado no horário, o envio roda quando ligar (dentro da
+janela 8h–19h). O PC precisa estar ligado e com o usuário logado; o login do
+WhatsApp Web fica salvo em `.perfil_whatsapp_web/`.
 
 Checagens em cada etapa (a meta é erro zero, então na dúvida ele **não envia**):
 

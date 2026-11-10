@@ -1,5 +1,5 @@
 {
-  "_ajuda": "Textos da prospecção. Tokens: {clinica} {a_clinica} {da_clinica} {bairro} {cidade} {local} {saudacao} {gancho} {autoridade} {case} {cta}. Spintax: {opção A|opção B}. {local} vira 'no <bairro>' ou, sem bairro, 'em <cidade>'.",
+  "_ajuda": "Textos da prospecção. Tokens: {clinica} {a_clinica} {da_clinica} {bairro} {cidade} {local} {nota} {saudacao} {gancho} {autoridade} {case} {cta}. Spintax: {opção A|opção B}. {local} vira 'no <bairro>' ou, sem bairro, 'em <cidade>'. {nota} é a nota do Google (ex.: '4,9') e só existe se for 4,5 ou mais: textos com {nota} só são usados nesses casos.",
 
   "saudacoes": {
     "manha": ["Bom dia! Tudo bem?", "Bom dia, tudo bem?"],
@@ -8,6 +8,24 @@
     "qualquer": ["Olá! Tudo bem?"]
   },
 
+  "_ab": "Teste A/B: cada clínica recebe, de forma fixa, a variante 'curta' (aberturas) ou 'completa' (estruturas). Na curta, quando uma PESSOA responde, o script envia a apresentação (estruturas_apresentacao).",
+
+  "aberturas": [
+    "{saudacao} Falo com a recepção {da_clinica}? Sou o Nickolas, trabalho com automação de processos para clínicas aqui em {cidade}. Quem cuida da parte de gestão aí?",
+    "{saudacao} Aqui é o Nickolas, trabalho com automação de atendimento para clínicas em {cidade}. Quem seria a pessoa responsável pela gestão {da_clinica}? Queria apresentar rapidamente uma ideia.",
+    "{saudacao} Vi as {nota} estrelas {da_clinica} no Google, parabéns! Sou o Nickolas, trabalho com automação de processos para clínicas aqui em {cidade}. Quem cuida da parte de gestão aí?"
+  ],
+
+  "estruturas_apresentacao": [
+    "Obrigado pelo retorno! {case}\n\n{cta_apresentacao}",
+    "Obrigado por responder! 😊\n\n{case}\n\n{cta_apresentacao}"
+  ],
+
+  "ctas_apresentacao": [
+    "Posso mostrar em 10 minutos (online ou presencial) como isso funcionaria aí? Qual dia e horário ficam melhores para vocês?",
+    "Consigo apresentar em uma conversa rápida de 10 minutos (online ou presencial). Qual seria o melhor dia e horário?"
+  ],
+
   "autoridades": [
     "Sou o Nickolas, atuo com automação de processos para clínicas de saúde aqui em {cidade}.",
     "Meu nome é Nickolas e atuo com automação de processos para clínicas de saúde aqui em {cidade}."
@@ -15,7 +33,8 @@
 
   "ganchos": [
     "Acompanho o trabalho {da_clinica} {local} e sei que manter a recepção ágil com alto volume de pacientes é um desafio diário.",
-    "Tenho acompanhado o trabalho {da_clinica} {local} e sei que manter a recepção ágil com alto volume de pacientes é um desafio diário."
+    "Tenho acompanhado o trabalho {da_clinica} {local} e sei que manter a recepção ágil com alto volume de pacientes é um desafio diário.",
+    "Vi as {nota} estrelas {da_clinica} no Google e sei que manter esse padrão com a recepção cheia é um desafio diário."
   ],
 
   "cases": [

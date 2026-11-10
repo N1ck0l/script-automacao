@@ -587,7 +587,7 @@ class TestModoAutomatico(BasePw):
         self.avisos = []
         pw.notificar_windows = lambda titulo, texto: self.avisos.append((titulo, texto))
         pw.verificar_conversas = lambda planilha, sessao, **kw: {
-            "conferidas": 0, "problemas": [], "respostas": [], "optouts": [],
+            "conferidas": 0, "nao_verificaveis": 0, "problemas": [], "respostas": [], "optouts": [],
             "automaticas": [], "erro": None}
         pw.ARQUIVO_TRAVA = self.tmpdir / ".envio.lock"
         pw.PASTA_LOGS = self.tmpdir / "logs"
@@ -757,6 +757,30 @@ class TestLeituraDeRespostas(unittest.TestCase):
         self.assertIsNone(pw.classificar_resposta(bolhas, [self.ENVIADA], self.DESDE))
 
 
+class TestResultadoEntrega(unittest.TestCase):
+    MSG = "Bom dia! Mensagem de prospecção completa para a clínica, com texto suficiente."
+    ENVIO = datetime(2026, 11, 10, 8, 25, 31)
+
+    def _b(self, hora, quem, texto):
+        return pw.interpretar_bolha(f"[{hora}, 10/11/2026] {quem}: ", texto)
+
+    def test_ok_e_duplicada(self):
+        um = [self._b("08:25", "Eu", self.MSG)]
+        self.assertEqual(pw.resultado_entrega(um, self.MSG, self.ENVIO), "ok")
+        self.assertEqual(pw.resultado_entrega(um * 2, self.MSG, self.ENVIO), "duplicada")
+
+    def test_so_a_resposta_do_robo_carregou_e_inconclusivo(self):
+        # Caso real (MB): só a última bolha (robô, mesmo minuto) carregou
+        bolhas = [self._b("08:25", "MB", "Olá, me chamo Gabi")]
+        self.assertEqual(pw.resultado_entrega(bolhas, self.MSG, self.ENVIO), "inconclusivo")
+        self.assertEqual(pw.resultado_entrega([], self.MSG, self.ENVIO), "inconclusivo")
+
+    def test_ausente_so_quando_o_historico_cobre_o_envio(self):
+        bolhas = [self._b("07:50", "MB", "mensagem anterior"),
+                  self._b("08:26", "MB", "outra")]
+        self.assertEqual(pw.resultado_entrega(bolhas, self.MSG, self.ENVIO), "ausente")
+
+
 class TestChaveClinica(unittest.TestCase):
     def test_mesma_clinica_com_nomes_diferentes(self):
         a = {"clinica": "Clínica CALE - Consultas | Exames | Laboratório", "bairro": ""}
@@ -772,12 +796,142 @@ class TestResumo(unittest.TestCase):
     def test_resumo_lista_o_essencial(self):
         texto = pw.montar_resumo(
             ["MB Odontologia"], ["Fixo X"], [],
-            {"conferidas": 1, "problemas": ["Y: mensagem aparece 2x"],
+            {"conferidas": 1, "nao_verificaveis": 0, "problemas": ["Y: mensagem aparece 2x"],
              "respostas": ["Odonto Center"], "optouts": [], "automaticas": []},
             pendentes=5, limite_dia=10, parada=None)
         for trecho in ("Enviadas: 1", "MB Odontologia", "ATENÇÃO: Y", "Odonto Center",
                        "Sem WhatsApp", "Fila acabando"):
             self.assertIn(trecho, texto)
+
+
+class TestTextosAB(unittest.TestCase):
+    COM_NOTA = {"clinica": "MB Odontologia", "bairro": "Centro", "cidade": "Aracaju",
+                "avaliacoes": "4.9 estrelas (321 avaliações)"}
+    SEM_NOTA = {"clinica": "MB Odontologia", "bairro": "Centro", "cidade": "Aracaju",
+                "avaliacoes": "3.8 estrelas"}
+
+    def test_nota_google_so_elogia_nota_alta(self):
+        self.assertEqual(pw.nota_google(self.COM_NOTA), "4,9")
+        self.assertEqual(pw.nota_google(self.SEM_NOTA), "")
+        self.assertEqual(pw.nota_google({"avaliacoes": ""}), "")
+
+    def test_sem_nota_nunca_fala_em_estrelas(self):
+        for _ in range(40):
+            self.assertNotIn("estrelas", pw.montar_texto(self.SEM_NOTA))
+            self.assertNotIn("estrelas", pw.montar_abertura(self.SEM_NOTA))
+
+    def test_com_nota_as_vezes_elogia(self):
+        textos = {pw.montar_abertura(self.COM_NOTA) for _ in range(60)}
+        self.assertTrue(any("4,9 estrelas" in t for t in textos))
+
+    def test_abertura_e_apresentacao_passam_na_validacao(self):
+        for contato in (self.COM_NOTA, self.SEM_NOTA):
+            for _ in range(30):
+                abertura = pw.montar_abertura(contato)
+                self.assertIsNone(pw.validar_mensagem(abertura, contato, "curta"), abertura)
+                self.assertLess(len(abertura), 300)
+                apresentacao = pw.montar_apresentacao(contato)
+                self.assertIsNone(pw.validar_mensagem(apresentacao, contato, "apresentacao"))
+                self.assertNotIn("{", apresentacao)
+
+    def test_variante_fixa_por_numero_e_dividida(self):
+        self.assertEqual(pw.variante_ab("5579999000001"), pw.variante_ab("5579999000001"))
+        variantes = {pw.variante_ab(f"55799990000{i:02d}") for i in range(20)}
+        self.assertEqual(variantes, {"curta", "completa"})
+
+
+class TestMenuDeRobo(unittest.TestCase):
+    def test_encontra_opcao_de_atendente(self):
+        odonto_center = ("Para agilizar seu atendimento, escolha uma das opções abaixo\n"
+                         "1. Agendar consulta.\n2. Remarcar horário.\n3. Estou com dor.\n"
+                         "4. Endereço e horários\n5. Falar com um atendente.")
+        self.assertEqual(pw.opcao_atendente([odonto_center]), "5")
+        self.assertEqual(pw.opcao_atendente(["5\ufe0f\u20e3 Falar com atendente"]), "5")
+        self.assertEqual(pw.opcao_atendente(["*3* - Conversar com a recepção"]), "3")
+
+    def test_sem_menu(self):
+        self.assertIsNone(pw.opcao_atendente(["Olá! Como posso ajudar?",
+                                              "Ligue 1234 para falar com a gente"]))
+
+
+class TestDiasUteis(unittest.TestCase):
+    def test_conta_so_dias_uteis(self):
+        self.assertEqual(pw.dias_uteis_entre(datetime(2026, 11, 13, 9),   # sexta
+                                             datetime(2026, 11, 16, 9)), 1)  # segunda
+        self.assertEqual(pw.dias_uteis_entre(datetime(2026, 11, 10, 9),
+                                             datetime(2026, 11, 12, 9)), 2)
+        self.assertEqual(pw.dias_uteis_entre(datetime(2026, 11, 19, 9),   # quinta
+                                             datetime(2026, 11, 23, 9)), 1)  # 20 é feriado
+
+
+class TestAcoesEAvisos(TestModoAutomatico):
+    def _contato_enviado(self, **extra):
+        c = self.planilha.contatos[0]
+        c.update({"status": "enviado", "resposta": "aguardando",
+                  "ultimo_envio": "2026-11-03T10:00:00", **extra})
+        return c
+
+    def test_followup_vem_antes_dos_novos(self):
+        self.args.limite_dia = 10
+        self.args.dias_followup, self.args.max_followups = 2, 1
+        c = self._contato_enviado()
+        n, log = self._rodar([(True, None, True)] * 6)
+        self.assertEqual(_SessaoFalsa.chamadas[0], c["telefone"])
+        atual = next(x for x in self.planilha.contatos if x["telefone"] == c["telefone"])
+        self.assertEqual(atual["followups"], "1")  # (o CSV é relido no início)
+        tipos = [r.get("tipo") for r in pw.ler_historico()]
+        self.assertEqual(tipos[0], "followup")
+
+    def test_novo_contato_recebe_variante_e_etapa(self):
+        n, _ = self._rodar([(True, None, True)] * 2)
+        enviados = [c for c in self.planilha.contatos if c["status"] == "enviado"]
+        self.assertEqual(len(enviados), 2)
+        for c in enviados:
+            self.assertIn(c["variante"], ("curta", "completa"))
+            self.assertEqual(c["etapa"],
+                             "abertura" if c["variante"] == "curta" else "apresentacao")
+        variantes = [r.get("variante") for r in pw.ler_historico()]
+        self.assertTrue(all(variantes))
+
+    def test_executa_apresentacao_e_menu(self):
+        c1 = self._contato_enviado(variante="curta", etapa="abertura", resposta="respondeu")
+        c2 = self.planilha.contatos[1]
+        c2.update(status="enviado", resposta="resposta automatica")
+        self.planilha.salvar()
+        _SessaoFalsa.roteiro = [(True, None, True), (True, None, True)]
+        relatorio = {"acoes": [("apresentacao", c1["telefone"], None),
+                               ("menu", c2["telefone"], "5")]}
+        sessao = pw.SessaoWeb()
+        with redirect_stdout(io.StringIO()):
+            feitos = pw.executar_acoes(relatorio, self.planilha, sessao,
+                                       pw.carregar_mensagens(), self.args)
+        self.assertEqual(len(feitos), 2)
+        self.assertEqual(c1["etapa"], "apresentacao")
+        self.assertEqual(c1["resposta"], "aguardando")      # volta a monitorar
+        self.assertEqual(c2["menu"], "respondido")
+        self.assertEqual(c2["resposta"], "resposta automatica")  # menu não muda resposta
+        self.assertEqual(pw.envios_hoje(), 1)                # menu não conta no limite
+
+    def test_aviso_imediato_de_resposta(self):
+        self.args.resumo_para = "79981677954"
+        _SessaoFalsa.roteiro = [(True, None, True)]
+        sessao = pw.SessaoWeb()
+        pw.avisar_respostas({"respostas_texto": [("MB Odontologia", "Pode ser quinta?")],
+                             "optouts": []}, sessao, self.args.resumo_para)
+        self.assertEqual(_SessaoFalsa.chamadas, ["5579981677954"])
+        self.assertTrue(self.avisos)
+
+    def test_sem_respostas_nao_avisa(self):
+        pw.avisar_respostas({"respostas_texto": [], "optouts": []}, pw.SessaoWeb(), "79981677954")
+        self.assertEqual((_SessaoFalsa.chamadas, self.avisos), ([], []))
+
+    def test_estatisticas_ab(self):
+        a, b = self.planilha.contatos[0], self.planilha.contatos[1]
+        a.update(status="enviado", variante="curta", etapa="apresentacao")
+        b.update(status="enviado", variante="completa", resposta="aguardando")
+        texto = pw.estatisticas_ab(self.planilha.contatos)
+        self.assertIn("curta: 1/1", texto)
+        self.assertIn("completa: 0/1", texto)
 
 
 class TestReset(unittest.TestCase):
