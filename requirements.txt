@@ -1,6 +1,5 @@
 # --- Minerador Google Maps (minerador_maps.py) ---
 playwright>=1.44
-pandas>=2.0
 
 # Após instalar, baixe o navegador (uma vez):
 #   playwright install chromium

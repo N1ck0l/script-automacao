@@ -1,0 +1,42 @@
+{
+  "_ajuda": "Textos da prospecção. Tokens: {clinica} {bairro} {cidade} {local} {saudacao} {gancho} {autoridade} {case} {cta}. Spintax: {opção A|opção B}. {local} vira 'no <bairro>' ou, sem bairro, 'em <cidade>'.",
+
+  "saudacoes": {
+    "manha": ["Bom dia, tudo bem?", "Bom dia! Como vai?"],
+    "tarde": ["Boa tarde! Tudo bem?", "Boa tarde, como vai?"],
+    "noite": ["Boa noite, tudo bem?"],
+    "qualquer": ["Olá, tudo bem?", "Olá! Como vai?"]
+  },
+
+  "ganchos": [
+    "Acompanho o trabalho da {clinica} {local} e sei que manter a recepção ágil com alto volume de pacientes é um desafio diário.",
+    "Tenho visto o crescimento da {clinica} aqui {local} e a referência que vocês são em atendimento na região."
+  ],
+
+  "autoridades": [
+    "Meu nome é Nickolas, atuo com automações de tecnologia para a área da saúde aqui em {cidade}.",
+    "Sou Nickolas e atuo com automações de tecnologia para a área da saúde aqui em {cidade}."
+  ],
+
+  "cases": [
+    "Recentemente desenvolvi para a clínica PROIMAGEM duas automações de alto impacto: 1) Um bot de pré-atendimento no WhatsApp que colhe todas as informações da queixa do paciente e entrega para a recepcionista uma ficha resumida pronta; 2) Uma automação fiscal que reduziu o tempo de emissão de NF-e para poucos minutos com validação em 1 clique.",
+    "Recentemente desenvolvi para a clínica PROIMAGEM duas automações de alto impacto: 1) um bot de pré-atendimento no WhatsApp que colhe a queixa do paciente e entrega à recepcionista uma ficha resumida pronta; e 2) uma automação fiscal que deixou a emissão de NF-e em poucos minutos, com validação em 1 clique."
+  ],
+
+  "ctas": [
+    "Gostaria de enviar uma prévia rápida de 2 minutos ou agendar 10 minutos para mostrar ao gestor/responsável da clínica como isso rodaria aí. Quem seria o contato indicado para alinharmos?",
+    "Posso te mandar uma prévia rápida de 2 minutos, ou agendar 10 minutos para mostrar ao gestor/responsável da clínica como isso rodaria aí? Quem seria o contato indicado para alinharmos?"
+  ],
+
+  "estruturas": [
+    "{saudacao}\n\n{gancho}\n\n{autoridade}\n\n{case}\n\n{cta}",
+    "{saudacao} {gancho}\n\n{autoridade}\n\n{case}\n\n{cta}",
+    "{saudacao}\n\n{gancho}\n\n{autoridade} {case}\n\n{cta}",
+    "{saudacao}\n\n{gancho}\n\n{autoridade}\n\n{case}\n\n{cta} 😊"
+  ],
+
+  "followups": [
+    "{saudacao} Passando para retomar minha mensagem sobre as automações de atendimento para a {clinica}. {Faz sentido|Vale a pena} eu te mandar a prévia rápida de 2 minutos?",
+    "{saudacao} Só para minha mensagem não se perder: ainda posso mostrar ao responsável da {clinica} como o bot de pré-atendimento funcionaria aí? {São só 10 minutos.|Leva só 10 minutos.}"
+  ]
+}

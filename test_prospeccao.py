@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Testes do núcleo anti-ban: telefones, spintax, limite diário e janela.
+"""Testes do núcleo anti-ban: telefones, spintax, limite diário, janela,
+intervalo entre envios, follow-up e opt-out.
 
 Rode com a biblioteca padrão (sem dependências):
     python3 -m unittest test_prospeccao -v
@@ -12,26 +13,23 @@ import io
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import prospeccao_whatsapp as pw
 
 
 class BasePw(unittest.TestCase):
-    """Salva/restaura os globais do módulo tocados pelos testes."""
+    """Isola o log de envios em um diretório temporário."""
 
     def setUp(self):
         self._log_original = pw.ARQUIVO_LOG
-        self._csv_original = pw.CAMINHO_CSV_ATIVO
-        self._contatos_original = pw.CONTATOS_GLOBAIS
         self._tmp = tempfile.TemporaryDirectory()
         self.tmpdir = Path(self._tmp.name)
+        pw.ARQUIVO_LOG = self.tmpdir / "historico.jsonl"
 
     def tearDown(self):
         pw.ARQUIVO_LOG = self._log_original
-        pw.CAMINHO_CSV_ATIVO = self._csv_original
-        pw.CONTATOS_GLOBAIS = self._contatos_original
         self._tmp.cleanup()
 
 
@@ -76,6 +74,11 @@ class TestTelefone(unittest.TestCase):
     def test_validar_sem_ddi_rejeitado(self):
         self.assertFalse(pw.validar_telefone("79999631871"))
 
+    def test_eh_celular(self):
+        self.assertTrue(pw.eh_celular("5579999631871"))
+        self.assertFalse(pw.eh_celular("557932111222"))   # fixo
+        self.assertFalse(pw.eh_celular("5579899631871"))  # não começa com 9
+
 
 # ---------------------------------------------------------------------------
 # Carga do CSV: deduplicação e validação
@@ -113,10 +116,38 @@ class TestCargaCsv(BasePw):
         contatos = pw.carregar_contatos(csv)
         self.assertEqual(contatos[0]["resposta"], "")
 
-    def test_usa_mock_se_arquivo_faltar(self):
-        contatos = pw.carregar_contatos(self.tmpdir / "nao_existe.csv")
-        self.assertTrue(contatos)
-        self.assertTrue(all(c["status"] == "pendente" for c in contatos))
+    def test_arquivo_ausente_nao_usa_mock(self):
+        with redirect_stdout(io.StringIO()):
+            contatos = pw.carregar_contatos(self.tmpdir / "nao_existe.csv")
+        self.assertEqual(contatos, [])
+
+    def test_csv_so_com_cabecalho_nao_usa_mock(self):
+        csv = self.tmpdir / "vazio.csv"
+        csv.write_text(",".join(pw.COLUNAS) + "\n", encoding="utf-8")
+        self.assertEqual(pw.carregar_contatos(csv), [])
+
+    def test_salvar_preserva_linhas_invalidas_e_duplicadas(self):
+        csv = self.tmpdir / "prospeccao.csv"
+        csv.write_text(
+            "clinica,bairro,cidade,telefone,status,minha_coluna\n"
+            "Clínica A,X,Aracaju,5579991111111,pendente,nota A\n"
+            "Clínica A dup,X,Aracaju,5579991111111,pendente,\n"
+            "Clínica B,Y,Aracaju,12345,pendente,\n"
+            "Clínica C,Z,,(79) 99222-2222,,\n",
+            encoding="utf-8",
+        )
+        with redirect_stdout(io.StringIO()):
+            planilha = pw.carregar_planilha(csv)
+        self.assertEqual(len(planilha.contatos), 2)
+        self.assertEqual(planilha.contatos[1]["cidade"], "Aracaju")  # padrão aplicado
+
+        planilha.salvar()
+        conteudo = csv.read_text(encoding="utf-8")
+        self.assertIn("Clínica A dup", conteudo)  # duplicada continua no arquivo
+        self.assertIn("Clínica B", conteudo)      # inválida continua no arquivo
+        self.assertIn(",12345,", conteudo)        # telefone original intacto
+        self.assertIn("nota A", conteudo)         # coluna extra preservada
+        self.assertIn("5579992222222", conteudo)  # válido normalizado
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +172,38 @@ class TestSpintax(unittest.TestCase):
 class TestMensagem(unittest.TestCase):
     CONTATO = {"clinica": "Ferraz Odontologia", "bairro": "São José",
                "cidade": "Aracaju"}
+
+    def test_mensagens_json_valido(self):
+        m = pw.carregar_mensagens()
+        for chave in pw.CHAVES_MENSAGENS:
+            self.assertTrue(m[chave], chave)
+
+    def test_saudacao_coerente_com_horario(self):
+        m = pw.carregar_mensagens()
+        for _ in range(30):
+            manha = pw.montar_texto(self.CONTATO, m, datetime(2026, 1, 5, 9, 0))
+            tarde = pw.montar_texto(self.CONTATO, m, datetime(2026, 1, 5, 15, 0))
+            self.assertNotIn("Boa tarde", manha)
+            self.assertNotIn("Bom dia", tarde)
+
+    def test_periodo_do_dia(self):
+        self.assertEqual(pw.periodo_do_dia(8), "manha")
+        self.assertEqual(pw.periodo_do_dia(12), "tarde")
+        self.assertEqual(pw.periodo_do_dia(18), "noite")
+
+    def test_sem_bairro_usa_cidade(self):
+        contato = {"clinica": "Clínica X", "bairro": "", "cidade": "Aracaju"}
+        for _ in range(30):
+            texto = pw.montar_texto(contato)
+            self.assertNotIn("no  ", texto)
+            self.assertNotIn("no e ", texto)
+            self.assertIn("em Aracaju", texto)
+
+    def test_followup_personalizado(self):
+        for _ in range(20):
+            texto = pw.montar_texto_followup(self.CONTATO)
+            self.assertIn("Ferraz Odontologia", texto)
+            self.assertNotIn("{", texto)
 
     def test_personalizada_sem_chaves_sobrando(self):
         for _ in range(30):
@@ -206,6 +269,40 @@ class TestControleVolume(BasePw):
 # Janela de horário
 # ---------------------------------------------------------------------------
 
+class TestIntervaloEntreEnvios(unittest.TestCase):
+    AGORA = datetime(2026, 1, 5, 10, 0, 0)
+
+    def test_sem_envio_anterior_nao_espera(self):
+        self.assertEqual(pw.segundos_de_espera(None, 60, self.AGORA), 0)
+
+    def test_espera_so_o_que_falta(self):
+        ultimo = self.AGORA - timedelta(seconds=20)
+        self.assertEqual(pw.segundos_de_espera(ultimo, 60, self.AGORA), 40)
+
+    def test_envio_antigo_nao_espera(self):
+        ultimo = self.AGORA - timedelta(hours=3)
+        self.assertEqual(pw.segundos_de_espera(ultimo, 90, self.AGORA), 0)
+
+
+class TestUltimoEnvio(BasePw):
+    def test_pega_o_mais_recente(self):
+        pw.ARQUIVO_LOG.write_text(
+            '{"timestamp": "2026-01-05T10:00:00"}\n'
+            '{"timestamp": "2026-01-05T11:30:00"}\n'
+            'linha corrompida\n', encoding="utf-8")
+        self.assertEqual(pw.ultimo_envio(), datetime(2026, 1, 5, 11, 30))
+
+    def test_sem_historico(self):
+        self.assertIsNone(pw.ultimo_envio())
+
+
+class TestEdicaoMultilinha(unittest.TestCase):
+    def test_mantem_linhas_vazias_ate_o_terminador(self):
+        entradas = iter(["Olá!", "", "Segundo parágrafo.", "", "Fim.", "."])
+        texto = pw.ler_texto_multilinha(lambda: next(entradas))
+        self.assertEqual(texto, "Olá!\n\nSegundo parágrafo.\n\nFim.")
+
+
 class TestJanelaHorario(unittest.TestCase):
     def test_dentro_da_janela(self):
         self.assertTrue(pw.dentro_da_janela(8, 19, datetime(2026, 1, 1, 8, 0)))
@@ -217,26 +314,92 @@ class TestJanelaHorario(unittest.TestCase):
         # madrugada é padrão de robô
         self.assertFalse(pw.dentro_da_janela(8, 19, datetime(2026, 1, 1, 3, 0)))
 
+    def test_dia_util(self):
+        self.assertTrue(pw.dia_util(datetime(2026, 11, 9)))    # segunda
+        self.assertFalse(pw.dia_util(datetime(2026, 11, 14)))  # sábado
+        self.assertFalse(pw.dia_util(datetime(2026, 11, 15)))  # domingo
+
 
 # ---------------------------------------------------------------------------
 # Persistência: status + timestamp no CSV
 # ---------------------------------------------------------------------------
 
+def _contato(**extra):
+    base = {"clinica": "Ferraz Odontologia", "bairro": "São José",
+            "cidade": "Aracaju", "telefone": "5579999631871",
+            "status": "pendente", "resposta": "", "atualizado_em": "",
+            "ultimo_envio": "", "followups": ""}
+    base.update(extra)
+    return base
+
+
 class TestPersistencia(BasePw):
     def test_marcar_enviado_grava_status_e_timestamp(self):
-        csv = self.tmpdir / "prospeccao.csv"
-        contato = {"clinica": "Ferraz Odontologia", "bairro": "São José",
-                   "cidade": "Aracaju", "telefone": "5579999631871",
-                   "status": "pendente", "resposta": "", "atualizado_em": ""}
-        pw.CAMINHO_CSV_ATIVO = csv
-        pw.CONTATOS_GLOBAIS = [contato]
+        contato = _contato()
+        planilha = pw.Planilha(self.tmpdir / "prospeccao.csv")
+        planilha.adicionar(contato)
 
-        pw.marcar_enviado(contato)
+        pw.marcar_enviado(contato, planilha)
 
-        conteudo = csv.read_text(encoding="utf-8")
+        conteudo = planilha.caminho.read_text(encoding="utf-8")
         self.assertIn("enviado", conteudo)
         self.assertIn("aguardando", conteudo)
         self.assertTrue(contato["atualizado_em"])  # timestamp preenchido
+        self.assertEqual(contato["ultimo_envio"], contato["atualizado_em"])
+
+    def test_followup_incrementa_contador(self):
+        contato = _contato(status="enviado", resposta="sem resposta")
+        planilha = pw.Planilha(self.tmpdir / "prospeccao.csv")
+        planilha.adicionar(contato)
+        pw.marcar_enviado(contato, planilha, pw.FOLLOWUP)
+        self.assertEqual(contato["followups"], "1")
+        self.assertEqual(contato["resposta"], "aguardando")
+
+
+class TestFollowup(unittest.TestCase):
+    AGORA = datetime(2026, 1, 10, 10, 0)
+
+    def test_elegivel_apos_n_dias_sem_resposta(self):
+        c = _contato(status="enviado", resposta="aguardando",
+                     ultimo_envio="2026-01-06T10:00:00")
+        self.assertTrue(pw.precisa_followup(c, 3, 1, self.AGORA))
+
+    def test_cedo_demais(self):
+        c = _contato(status="enviado", ultimo_envio="2026-01-09T10:00:00")
+        self.assertFalse(pw.precisa_followup(c, 3, 1, self.AGORA))
+
+    def test_respondeu_ou_opt_out_nao_recebe(self):
+        respondeu = _contato(status="enviado", resposta="respondeu",
+                             ultimo_envio="2026-01-01T10:00:00")
+        opt_out = _contato(status="nao_contatar", resposta="sem interesse",
+                           ultimo_envio="2026-01-01T10:00:00")
+        self.assertFalse(pw.precisa_followup(respondeu, 3, 1, self.AGORA))
+        self.assertFalse(pw.precisa_followup(opt_out, 3, 1, self.AGORA))
+
+    def test_respeita_maximo_de_followups(self):
+        c = _contato(status="enviado", resposta="aguardando", followups="1",
+                     ultimo_envio="2026-01-01T10:00:00")
+        self.assertFalse(pw.precisa_followup(c, 3, 1, self.AGORA))
+        self.assertTrue(pw.precisa_followup(c, 3, 2, self.AGORA))
+
+    def test_csv_antigo_usa_atualizado_em(self):
+        c = _contato(status="enviado", atualizado_em="2026-01-01T10:00:00")
+        self.assertTrue(pw.precisa_followup(c, 3, 1, self.AGORA))
+
+
+class TestReset(unittest.TestCase):
+    def test_reabre_so_quem_nao_engajou(self):
+        contatos = [
+            _contato(clinica="A", status="enviado", resposta="sem resposta",
+                     followups="1"),
+            _contato(clinica="B", status="enviado", resposta="respondeu"),
+            _contato(clinica="C", status="nao_contatar", resposta="sem interesse"),
+            _contato(clinica="D", status="pendente"),
+        ]
+        self.assertEqual(pw.reabrir_fila(contatos), 1)
+        self.assertEqual([c["status"] for c in contatos],
+                         ["pendente", "enviado", "nao_contatar", "pendente"])
+        self.assertEqual(contatos[0]["followups"], "")
 
 
 if __name__ == "__main__":

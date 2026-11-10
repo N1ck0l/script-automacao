@@ -7,7 +7,9 @@ Rode com a biblioteca padrão (sem dependências):
     python3 -m unittest test_minerador -v
 """
 
+import io
 import tempfile
+from contextlib import redirect_stdout
 import unittest
 from pathlib import Path
 
@@ -177,6 +179,25 @@ class TestIntegrarCsv(unittest.TestCase):
         self.assertEqual(linhas[0], ",".join(pw.COLUNAS))
         self.assertEqual(len(linhas), 3)  # cabeçalho + Ferraz + nova
         self.assertIn("respondeu", linhas[1])  # dado de envio intacto
+
+    def test_csv_so_com_cabecalho_nao_injeta_contatos_ficticios(self):
+        self.csv.write_text(",".join(pw.COLUNAS) + "\n", encoding="utf-8")
+        inseridos, _ = mm.integrar_csv([self._novo("79999631871", "Real")],
+                                       self.csv)
+        linhas = self.csv.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(inseridos, 1)
+        self.assertEqual(len(linhas), 2)  # cabeçalho + a nova, nada mais
+
+    def test_preserva_linhas_invalidas_existentes(self):
+        self.csv.write_text(
+            ",".join(pw.COLUNAS) + "\n"
+            "Sem Telefone,Centro,Aracaju,,,,pendente,,,,\n",
+            encoding="utf-8")
+        with redirect_stdout(io.StringIO()):
+            mm.integrar_csv([self._novo("79999631871", "Nova")], self.csv)
+        conteudo = self.csv.read_text(encoding="utf-8")
+        self.assertIn("Sem Telefone", conteudo)
+        self.assertIn("Nova", conteudo)
 
 
 if __name__ == "__main__":

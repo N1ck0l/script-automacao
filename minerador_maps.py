@@ -16,6 +16,7 @@ CARACTERÍSTICAS DE ROBUSTEZ / EVASÃO BÁSICA:
   - Pausas aleatórias curtas (1–3s, configuráveis) entre navegações.
   - Extração campo a campo com fallbacks: se um elemento não aparece, tenta
     outro seletor antes de desistir (não derruba a mineração inteira).
+  - Só celulares por padrão (fixos raramente têm WhatsApp; --incluir-fixos).
 
 USO:
   python minerador_maps.py --termo "clinica odontologica em Aracaju SE" --max 40
@@ -154,6 +155,8 @@ def extrair_avaliacoes(texto: str) -> str:
 def preparar_novo_registro(dados: dict, cidade: str = CIDADE_PADRAO) -> dict | None:
     """Converte um resultado bruto no registro do CSV; None se inválido.
 
+    Telefones fixos são aceitos aqui; o filtro de celular fica em `minerar`.
+
     Regras: telefone obrigatório e válido (DDI 55 + DDD + número), nome
     obrigatório. `status` nasce como "pendente" conforme o fluxo de envio.
     """
@@ -163,17 +166,17 @@ def preparar_novo_registro(dados: dict, cidade: str = CIDADE_PADRAO) -> dict | N
         return None
     if not pw.validar_telefone(telefone):
         return None
-    return {
-        "clinica": clinica,
-        "bairro": (dados.get("bairro") or "").strip(),
-        "cidade": cidade,
-        "telefone": telefone,
-        "site": (dados.get("site") or "").strip(),
-        "avaliacoes": (dados.get("avaliacoes") or "").strip(),
-        "status": "pendente",
-        "resposta": "",
-        "atualizado_em": "",
-    }
+    registro = {c: "" for c in pw.COLUNAS}  # mesmo esquema/ordem do envio
+    registro.update(
+        clinica=clinica,
+        bairro=(dados.get("bairro") or "").strip(),
+        cidade=cidade,
+        telefone=telefone,
+        site=(dados.get("site") or "").strip(),
+        avaliacoes=(dados.get("avaliacoes") or "").strip(),
+        status=pw.PENDENTE,
+    )
+    return registro
 
 
 def mesclar_registros(existentes: list[dict],
@@ -203,24 +206,20 @@ def mesclar_registros(existentes: list[dict],
 def integrar_csv(novos: list[dict], caminho: Path) -> tuple[int, int]:
     """Anexa resultados novos ao CSV existente sem sobrescrever duplicados.
 
-    Usa pandas quando disponível (requirements.txt); caso contrário, cai para
-    a gravação atômica da biblioteca padrão. Retorna (inseridos, pulados).
+    Linhas já existentes (inclusive inválidas ou duplicadas, que ficam fora da
+    fila) são preservadas; a gravação é atômica. Retorna (inseridos, pulados).
     """
-    existentes: list[dict] = []
-    if caminho.exists():
-        existentes = pw.carregar_contatos(caminho)  # valida e deduplica
+    caminho = Path(caminho)
+    planilha = (pw.carregar_planilha(caminho) if caminho.exists()
+                else pw.Planilha(caminho))
 
-    inseridos, pulados = mesclar_registros(existentes, novos)
+    inseridos, pulados = mesclar_registros(planilha.contatos, novos)
     if not inseridos:
         return 0, pulados
 
-    todos = existentes + inseridos
-    try:
-        import pandas as pd
-        df = pd.DataFrame(todos).reindex(columns=pw.COLUNAS)
-        df.to_csv(caminho, index=False, encoding="utf-8")
-    except ImportError:
-        pw.salvar_contatos(caminho, todos)
+    for registro in inseridos:
+        planilha.adicionar(registro)
+    planilha.salvar()
     return len(inseridos), pulados
 
 
@@ -384,7 +383,7 @@ def coletar_links(page, max_alvos: int,
 
 
 def minerar(termo: str, max_alvos: int = 40, cidade: str = CIDADE_PADRAO,
-            visivel: bool = False,
+            visivel: bool = False, incluir_fixos: bool = False,
             delay_min: float = DELAY_MIN,
             delay_max: float = DELAY_MAX) -> list[dict]:
     """Abre o Maps, coleta os links e minera cada place. Retorna registros
@@ -439,6 +438,11 @@ def minerar(termo: str, max_alvos: int = 40, cidade: str = CIDADE_PADRAO,
                           f"({dados.get('telefone') or 'sem número'})")
                     continue
 
+                if not incluir_fixos and not pw.eh_celular(registro["telefone"]):
+                    print(f"         ↳ pulado: telefone fixo +{registro['telefone']} "
+                          "(raramente tem WhatsApp; use --incluir-fixos)")
+                    continue
+
                 registros.append(registro)
                 print(f"         ↳ {registro['clinica']} | {registro['bairro'] or '?'} "
                       f"| +{registro['telefone']} | {registro['avaliacoes'] or 'sem nota'}")
@@ -472,6 +476,9 @@ def main() -> None:
                         help="Pausa máxima entre navegações em segundos (padrão: 3)")
     parser.add_argument("--visivel", action="store_true",
                         help="Abre o navegador visível (headless é o padrão)")
+    parser.add_argument("--incluir-fixos", action="store_true",
+                        help="Inclui telefones fixos (por padrão só celulares, "
+                             "que quase sempre têm WhatsApp)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Mostra o resultado sem gravar no CSV")
     args = parser.parse_args()
@@ -480,7 +487,7 @@ def main() -> None:
         parser.error("--delay-min não pode ser maior que --delay-max")
 
     registros = minerar(args.termo, max_alvos=args.max, cidade=args.cidade,
-                        visivel=args.visivel,
+                        visivel=args.visivel, incluir_fixos=args.incluir_fixos,
                         delay_min=args.delay_min, delay_max=args.delay_max)
 
     if not registros:
