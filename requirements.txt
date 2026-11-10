@@ -1,0 +1,14 @@
+# --- Minerador Google Maps (minerador_maps.py) ---
+playwright>=1.44
+pandas>=2.0
+
+# Após instalar, baixe o navegador (uma vez):
+#   playwright install chromium
+
+# --- Opcional: modo --modo web do envio (Selenium) ---
+selenium>=4.20
+
+# --- Opcional: testes ---
+# Os testes rodam com a biblioteca padrão:
+#   python3 -m unittest discover -v
+# pytest>=8.0

@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Runtime do projeto (dados de sessão, não do código)
+historico_envios.jsonl
+.perfil_whatsapp_web/
+*.csv.tmp
