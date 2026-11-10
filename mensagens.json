@@ -1,6 +1,5 @@
 {
-  "_ajuda": "Textos da prospecção. Tokens: {clinica} {a_clinica} {da_clinica} {bairro} {cidade} {local} {nota} {saudacao} {gancho} {autoridade} {case} {cta}. Spintax: {opção A|opção B}. {local} vira 'no <bairro>' ou, sem bairro, 'em <cidade>'. {nota} é a nota do Google (ex.: '4,9') e só existe se for 4,5 ou mais: textos com {nota} só são usados nesses casos.",
-
+  "_ajuda": "Textos da prospecção. Tokens: {clinica} {a_clinica} {da_clinica} {bairro} {cidade} {local} {nota} {saudacao} {gancho} {autoridade} {case} {cta}. Spintax: {opção A|opção B}. {local} vira 'no <bairro>' ou, sem bairro, 'em <cidade>'. {nota} é a nota do Google (ex.: '4,9') e só existe se for 4,5 ou mais: textos com {nota} só são usados nesses casos. Tom: o menos invasivo possível — sem pressão, sem pedir reunião no 1º contato, com opt-out fácil.",
   "saudacoes": {
     "manha": ["Bom dia! Tudo bem?", "Bom dia, tudo bem?"],
     "tarde": ["Boa tarde! Tudo bem?", "Boa tarde, tudo bem?"],
@@ -11,9 +10,9 @@
   "_ab": "Teste A/B: cada clínica recebe, de forma fixa, a variante 'curta' (aberturas) ou 'completa' (estruturas). Na curta, quando uma PESSOA responde, o script envia a apresentação (estruturas_apresentacao).",
 
   "aberturas": [
-    "{saudacao} Falo com a recepção {da_clinica}? Sou o Nickolas, trabalho com automação de processos para clínicas aqui em {cidade}. Quem cuida da parte de gestão aí?",
-    "{saudacao} Aqui é o Nickolas, trabalho com automação de atendimento para clínicas em {cidade}. Quem seria a pessoa responsável pela gestão {da_clinica}? Queria apresentar rapidamente uma ideia.",
-    "{saudacao} Vi as {nota} estrelas {da_clinica} no Google, parabéns! Sou o Nickolas, trabalho com automação de processos para clínicas aqui em {cidade}. Quem cuida da parte de gestão aí?"
+    "{saudacao} Aqui é o Nickolas, trabalho com automação de processos para clínicas aqui em {cidade}. Vi o perfil {da_clinica} no Google — posso mandar uma ideia rapidinha?",
+    "{saudacao} Sou o Nickolas, trabalho com automação para clínicas. Vi o trabalho {da_clinica} {local} no Google — posso te contar o que faço?",
+    "{saudacao} Vi as {nota} estrelas {da_clinica} no Google, parabéns! Sou o Nickolas, trabalho com automação para clínicas aqui em {cidade}. Posso te contar o que faço?"
   ],
 
   "estruturas_apresentacao": [
@@ -22,7 +21,7 @@
   ],
 
   "ctas_apresentacao": [
-    "Posso mostrar em 10 minutos (online ou presencial) como isso funcionaria aí? Qual dia e horário ficam melhores para vocês?",
+    "Posso mostrar em 10 minutos (online ou presencial) como funcionaria aí? Qual dia e horário ficam melhores para vocês?",
     "Consigo apresentar em uma conversa rápida de 10 minutos (online ou presencial). Qual seria o melhor dia e horário?"
   ],
 
@@ -32,19 +31,19 @@
   ],
 
   "ganchos": [
-    "Acompanho o trabalho {da_clinica} {local} e sei que manter a recepção ágil com alto volume de pacientes é um desafio diário.",
-    "Tenho acompanhado o trabalho {da_clinica} {local} e sei que manter a recepção ágil com alto volume de pacientes é um desafio diário.",
-    "Vi as {nota} estrelas {da_clinica} no Google e sei que manter esse padrão com a recepção cheia é um desafio diário."
+    "O trabalho {da_clinica} {local} me chamou atenção no Google.",
+    "Vi o trabalho {da_clinica} {local} no Google e resolvi escrever.",
+    "Vi as {nota} estrelas {da_clinica} no Google — parabéns pelo padrão!"
   ],
 
   "cases": [
-    "Desenvolvi recentemente duas soluções que destravaram a operação em clínicas locais:\n• Triagem inteligente no WhatsApp: coleta as queixas do paciente e entrega para a recepcionista uma ficha resumida pronta para o atendimento;\n• Emissão rápida de NF-e: reduziu um processo lento e manual para poucos minutos, exigindo apenas a validação humana em 1 clique.",
-    "Recentemente desenvolvi duas soluções que destravaram a operação em clínicas locais:\n• Triagem inteligente no WhatsApp: coleta as queixas do paciente e entrega à recepcionista uma ficha resumida, pronta para o atendimento;\n• Emissão rápida de NF-e: transformou um processo lento e manual em poucos minutos, exigindo apenas a validação humana em 1 clique."
+    "Já desenvolvi para clínicas locais duas automações: triagem no WhatsApp (a recepcionista recebe a queixa do paciente já resumida) e emissão de NF-e em poucos minutos, com validação em 1 clique.",
+    "Uma das automações que já fiz: emissão de NF-e — antes manual e demorada, hoje sai em poucos minutos com validação em 1 clique. A triagem no WhatsApp também organiza as queixas antes do atendimento."
   ],
 
   "ctas": [
-    "Gostaria de alinhar uma conversa rápida de 10 minutos (online ou presencial) com o responsável pela gestão da clínica para demonstrar como isso rodaria aí. Quem seria o contato indicado para combinarmos?",
-    "Podemos alinhar uma conversa rápida de 10 minutos (online ou presencial) com o responsável pela gestão da clínica, para eu demonstrar como isso rodaria aí? Quem seria o contato indicado para combinarmos?"
+    "Se fizer sentido, te mando um resumo de 1 minuto de como funcionaria aí. Posso?",
+    "Quer que eu te mande um exemplo rápido de como ficaria? Se não for relevante, é só me avisar."
   ],
 
   "estruturas": [
@@ -55,7 +54,7 @@
   ],
 
   "followups": [
-    "{saudacao} Passando para retomar minha mensagem sobre as automações para {a_clinica}. {Faz sentido|Vale a pena} alinharmos uma conversa rápida de 10 minutos (online ou presencial) com o responsável pela gestão?",
-    "{saudacao} Só para minha mensagem não se perder: consigo alinhar 10 minutos (online ou presencial) com o responsável pela gestão {da_clinica} para demonstrar como as automações rodariam aí?"
+    "{saudacao} Passando para saber se deu para ver minha mensagem sobre {a_clinica}. Se não for relevante, sem problema — é só me avisar.",
+    "{saudacao} Só passando de novo: se {fizer sentido|for o caso}, te mando um resumo rápido das automações {da_clinica}. Se não, sem problema algum."
   ]
 }
