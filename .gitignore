@@ -8,3 +8,4 @@ __pycache__/
 .perfil_whatsapp_web/
 *.csv.tmp
 .envio.lock
+logs/

@@ -434,9 +434,48 @@ def dentro_da_janela(inicio: int, fim: int, agora: datetime | None = None) -> bo
     return inicio <= hora < fim
 
 
+# Feriados fixos (mês, dia): nacionais + Sergipe + Aracaju, e vésperas em que
+# clínicas costumam fechar. Ajuste se prospectar em outra cidade.
+FERIADOS_FIXOS = {
+    (1, 1), (4, 21), (5, 1), (9, 7), (10, 12), (11, 2), (11, 15), (11, 20),
+    (12, 25),                      # nacionais
+    (7, 8),                        # Emancipação Política de Sergipe
+    (3, 17), (12, 8),              # Aniversário de Aracaju; N. Sra. da Conceição
+    (12, 24), (12, 31),            # vésperas de Natal e Ano Novo
+}
+
+
+def _pascoa(ano: int):
+    """Domingo de Páscoa (algoritmo de Meeus/Jones/Butcher)."""
+    from datetime import date
+    a, b, c = ano % 19, ano // 100, ano % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l_ = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l_) // 451
+    mes = (h + l_ - 7 * m + 114) // 31
+    dia = ((h + l_ - 7 * m + 114) % 31) + 1
+    return date(ano, mes, dia)
+
+
+def eh_feriado(dia) -> bool:
+    """Feriado fixo ou móvel (Carnaval, Quarta de Cinzas, Sexta Santa, Corpus Christi)."""
+    from datetime import timedelta
+    dia = dia.date() if isinstance(dia, datetime) else dia
+    if (dia.month, dia.day) in FERIADOS_FIXOS:
+        return True
+    pascoa = _pascoa(dia.year)
+    moveis = {pascoa + timedelta(days=n) for n in (-48, -47, -46, -2, 60)}
+    return dia in moveis
+
+
 def dia_util(agora: datetime | None = None) -> bool:
-    """Segunda a sexta. Prospecção no fim de semana parece automação."""
-    return (agora or datetime.now()).weekday() < 5
+    """Segunda a sexta, exceto feriados. Fora disso, prospecção parece automação."""
+    agora = agora or datetime.now()
+    return agora.weekday() < 5 and not eh_feriado(agora)
 
 
 def atualizar_historico(contato: dict, mensagem: str, modo: str,
@@ -684,6 +723,8 @@ class SessaoWeb:
     def __init__(self) -> None:
         self.driver = None
         self._trava: TravaEnvio | None = None
+        self.ultimo_erro: str | None = None
+        self.confirmado = False
 
     def _garantir_driver(self):
         if self.driver is None:
@@ -701,89 +742,213 @@ class SessaoWeb:
                   "acelera nas próximas vezes)...")
         return self.driver
 
+    # Resultado do último envio (para o modo automático decidir o que fazer)
+    SEM_WHATSAPP = "sem_whatsapp"        # número não tem conta no WhatsApp
+    DESLOGADO = "deslogado"              # WhatsApp Web pedindo QR Code
+    TEXTO_NAO_CONFERE = "texto_nao_confere"
+    NAO_CONFIRMADO = "nao_confirmado"    # ENTER dado, mas a bolha não foi vista
+    TECNICO = "tecnico"
+    BLOQUEADO = "bloqueado"
+    CANCELADO = "cancelado"
+
     def enviar(self, contato: dict, mensagem: str,
-               permitir_reenvio: bool = False) -> bool:
-        """Prepara e envia UMA mensagem. Sem `permitir_reenvio`, recusa números
-        que já receberam hoje — conferido de novo no último instante."""
+               permitir_reenvio: bool = False, confirmar: bool = True) -> bool:
+        """Envia UMA mensagem. Retorna True se o ENTER foi dado.
+
+        Depois do retorno, `self.ultimo_erro` diz por que falhou (ou None) e
+        `self.confirmado` diz se a bolha enviada foi lida de volta na conversa
+        com exatamente o texto aprovado.
+
+        `confirmar=False` (modo automático) pula as perguntas ao operador; todas
+        as checagens automáticas continuam valendo.
+        """
+        self.ultimo_erro = None
+        self.confirmado = False
         if not permitir_reenvio and enviado_hoje(contato["telefone"]):
             print(f"[BLOQUEADO] +{contato['telefone']} já recebeu mensagem hoje "
                   "— envio duplicado evitado.")
+            self.ultimo_erro = self.BLOQUEADO
             return False
         _cabecalho_alvo(contato)
         print("=" * 64)
-        if input("\nPreparar o envio no WhatsApp Web (Selenium)? [s/N]: "
-                 ).strip().lower() != "s":
+        if confirmar and input("\nPreparar o envio no WhatsApp Web (Selenium)? [s/N]: "
+                               ).strip().lower() != "s":
             print("[SKIP] Envio cancelado pelo operador.")
+            self.ultimo_erro = self.CANCELADO
             return False
 
         try:
-            from selenium.webdriver.common.by import By
             from selenium.webdriver.common.keys import Keys
-            from selenium.webdriver.support import expected_conditions as EC
-            from selenium.webdriver.support.ui import WebDriverWait
             driver = self._garantir_driver()
         except ImportError:
             print("[ERRO] Selenium não instalado. Rode: pip install -r requirements.txt")
+            self.ultimo_erro = self.TECNICO
             return False
         except EnvioEmAndamento as exc:
             print(f"[BLOQUEADO] {exc}")
+            self.ultimo_erro = self.BLOQUEADO
             return False
         except Exception as exc:  # noqa: BLE001
             print(f"[ERRO] Não foi possível abrir o Chrome: {exc}")
+            self.ultimo_erro = self.TECNICO
             self.fechar()
             return False
 
+        enter_dado = False
         try:
             driver.get(montar_link(contato, mensagem))
-            caixa = WebDriverWait(driver, 60).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, self.SELETOR_CAIXA)))
+            caixa, situacao = self._esperar_conversa(driver)
+            if situacao == self.SEM_WHATSAPP:
+                print(f"[SEM WHATSAPP] +{contato['telefone']} não está no WhatsApp.")
+                self.ultimo_erro = self.SEM_WHATSAPP
+                return False
+            if situacao == self.DESLOGADO:
+                print("[ERRO] WhatsApp Web desconectado (pedindo QR Code).")
+                self.ultimo_erro = self.DESLOGADO
+                return False
+            if caixa is None:
+                print("[ERRO] A conversa não abriu a tempo.")
+                self.ultimo_erro = self.TECNICO
+                return False
+
             # Espera o WhatsApp terminar de preencher a caixa com o texto do link.
             # NUNCA digitamos/colamos por cima: isso já duplicou mensagens
             # (cópia sem quebras de linha misturada ao texto original).
             confere = False
             for _ in range(40):  # até ~20s
                 time.sleep(0.5)
-                if texto_confere(caixa.get_attribute("innerText") or "", mensagem):
+                caixa = self._caixa_atual(driver) or caixa  # o WhatsApp recria a caixa
+                if texto_confere(self._texto(caixa), mensagem):
                     confere = True
                     break
             if not confere:
                 print("[ERRO] O texto na caixa não confere com a mensagem aprovada "
                       "(faltando ou duplicado) — NADA foi enviado.")
                 self._limpar_caixa(caixa)
+                self.ultimo_erro = self.TEXTO_NAO_CONFERE
                 return False
 
-            print("\n" + "=" * 64)
-            print("MENSAGEM NA CAIXA DA CONVERSA, MAS *NÃO* ENVIADA.")
-            print("Confira no navegador. Só envie se você revisar o texto.")
-            print("=" * 64)
-            if input("ENVIAR AGORA? Digite 'ENVIAR' (ou qualquer outra coisa "
-                     "para abortar): ").strip() != "ENVIAR":
-                print("[SKIP] Envio abortado pelo operador (nada foi enviado).")
-                self._limpar_caixa(caixa)
-                return False
+            if confirmar:
+                print("\n" + "=" * 64)
+                print("MENSAGEM NA CAIXA DA CONVERSA, MAS *NÃO* ENVIADA.")
+                print("Confira no navegador. Só envie se você revisar o texto.")
+                print("=" * 64)
+                if input("ENVIAR AGORA? Digite 'ENVIAR' (ou qualquer outra coisa "
+                         "para abortar): ").strip() != "ENVIAR":
+                    print("[SKIP] Envio abortado pelo operador (nada foi enviado).")
+                    self._limpar_caixa(caixa)
+                    self.ultimo_erro = self.CANCELADO
+                    return False
 
-            # Última conferência: alguém pode ter enviado enquanto revisávamos.
+            # Última conferência: alguém pode ter enviado enquanto preparávamos.
             if not permitir_reenvio and enviado_hoje(contato["telefone"]):
-                print("[BLOQUEADO] Este número recebeu mensagem durante a revisão "
+                print("[BLOQUEADO] Este número recebeu mensagem durante a preparação "
                       "— envio duplicado evitado.")
                 self._limpar_caixa(caixa)
+                self.ultimo_erro = self.BLOQUEADO
                 return False
             # ...e o texto ainda é exatamente o aprovado?
-            if not texto_confere(caixa.get_attribute("innerText") or "", mensagem):
-                print("[ERRO] O texto na caixa mudou desde a revisão — NADA foi enviado.")
+            caixa = self._caixa_atual(driver) or caixa
+            if not texto_confere(self._texto(caixa), mensagem):
+                print("[ERRO] O texto na caixa mudou — NADA foi enviado.")
                 self._limpar_caixa(caixa)
+                self.ultimo_erro = self.TEXTO_NAO_CONFERE
                 return False
 
+            antes = self._contar_bolhas_iguais(driver, mensagem)
             caixa.send_keys(Keys.ENTER)
-            time.sleep(2)
-            print("[OK] Mensagem enviada via WhatsApp Web.")
+            enter_dado = True
+
+            # Confirmação: apareceu na conversa UMA bolha nova com exatamente o
+            # texto aprovado? (Conta bolhas iguais, então uma resposta automática
+            # da clínica chegando logo depois não atrapalha.)
+            for _ in range(30):  # até ~15s
+                time.sleep(0.5)
+                if self._contar_bolhas_iguais(driver, mensagem) == antes + 1:
+                    self.confirmado = True
+                    break
+            if self.confirmado:
+                # A bolha aparece antes da transmissão terminar: espera um pouco
+                # antes de navegar/fechar o Chrome para não perder a mensagem.
+                time.sleep(6)
+                print("[OK] Mensagem enviada e conferida na conversa.")
+            else:
+                print("[ALERTA] ENTER dado, mas a mensagem enviada não foi conferida "
+                      "na conversa — verifique manualmente.")
+                self.ultimo_erro = self.NAO_CONFIRMADO
             return True
 
         except Exception as exc:  # noqa: BLE001 - seletores da Meta mudam com frequência
             print(f"[ERRO] Falha na automação do WhatsApp Web: {exc}")
-            print("       Alternativa: use --modo manual")
             self.fechar()  # navegador pode ter sido fechado; reabre no próximo
+            if enter_dado:
+                # A mensagem PODE ter saído: tratar como enviada não conferida,
+                # para registrar no histórico e nunca reenviar por engano.
+                print("[ALERTA] O erro ocorreu depois do ENTER — considere a "
+                      "mensagem enviada e verifique manualmente.")
+                self.ultimo_erro = self.NAO_CONFIRMADO
+                return True
+            print("       Alternativa: use --modo manual")
+            self.ultimo_erro = self.TECNICO
             return False
+
+    def _caixa_atual(self, driver):
+        """Caixa de mensagem atual (o WhatsApp recria o elemento ao carregar)."""
+        from selenium.webdriver.common.by import By
+        caixas = driver.find_elements(By.CSS_SELECTOR, self.SELETOR_CAIXA)
+        return caixas[0] if caixas else None
+
+    @staticmethod
+    def _texto(elemento) -> str:
+        """innerText tolerante a elemento obsoleto ('' se sumiu)."""
+        try:
+            return elemento.get_attribute("innerText") or ""
+        except Exception:  # noqa: BLE001 - StaleElementReference etc.
+            return ""
+
+    def _esperar_conversa(self, driver, segundos: int = 60):
+        """Espera a caixa de mensagem OU um motivo para desistir.
+
+        Retorna (caixa, None) | (None, SEM_WHATSAPP) | (None, DESLOGADO) |
+        (None, None) no tempo esgotado.
+        """
+        from selenium.webdriver.common.by import By
+        qr_visto_desde = None
+        fim = time.time() + segundos
+        while time.time() < fim:
+            caixas = driver.find_elements(By.CSS_SELECTOR, self.SELETOR_CAIXA)
+            if caixas:
+                return caixas[0], None
+            for dialogo in driver.find_elements(
+                    By.CSS_SELECTOR, "[role='dialog'], [data-animate-modal-popup]"):
+                texto = self._texto(dialogo).lower()
+                if "não está no whatsapp" in texto or "inválido" in texto \
+                        or "not on whatsapp" in texto or "invalid" in texto:
+                    return None, self.SEM_WHATSAPP
+            if driver.find_elements(By.CSS_SELECTOR,
+                                    "canvas[aria-label*='QR' i], [data-ref] canvas"):
+                qr_visto_desde = qr_visto_desde or time.time()
+                if time.time() - qr_visto_desde > 20:  # dá tempo de reconectar
+                    return None, self.DESLOGADO
+            time.sleep(0.5)
+        return None, None
+
+    @staticmethod
+    def _contar_bolhas_iguais(driver, mensagem: str) -> int:
+        """Quantas mensagens visíveis na conversa têm exatamente este texto."""
+        from selenium.webdriver.common.by import By
+        total = 0
+        for bolha in driver.find_elements(By.CSS_SELECTOR,
+                                          "#main [data-pre-plain-text]"):
+            try:
+                textos = bolha.find_elements(By.CSS_SELECTOR,
+                                             "[data-testid='selectable-text']")
+                texto = (textos[0] if textos else bolha).get_attribute("innerText") or ""
+            except Exception:  # noqa: BLE001 - bolha re-renderizada; conta na próxima
+                continue
+            if texto_confere(texto, mensagem):
+                total += 1
+        return total
 
     @staticmethod
     def _limpar_caixa(caixa) -> None:
@@ -1029,7 +1194,179 @@ def rodar_fila(fila: list[dict], planilha: Planilha, args: argparse.Namespace,
 
 
 # ---------------------------------------------------------------------------
-# 6. CLI
+# 6. MODO AUTOMÁTICO (agendado) — sem operador, com checagens em cada etapa
+# ---------------------------------------------------------------------------
+
+PASTA_LOGS = BASE_DIR / "logs"
+TEXTOS_PROIBIDOS = ("proimagem", "prévia", "previa")
+
+
+def validar_mensagem(mensagem: str, contato: dict) -> str | None:
+    """Checagem final de uma mensagem gerada. Retorna o problema ou None.
+
+    No modo automático ninguém revisa o texto: qualquer coisa estranha faz o
+    contato ser pulado (e registrado no log) em vez de enviado.
+    """
+    nome = nome_para_mensagem(contato["clinica"], contato.get("bairro", ""),
+                              contato.get("cidade") or CIDADE_PADRAO)
+    if "{" in mensagem or "}" in mensagem or "\x00" in mensagem:
+        return "token/spintax não resolvido"
+    if "|" in mensagem:
+        return "nome com lixo de SEO ('|')"
+    baixo = mensagem.lower()
+    for proibido in TEXTOS_PROIBIDOS:
+        if proibido in baixo:
+            return f"texto proibido: '{proibido}'"
+    if nome not in mensagem:
+        return "nome da clínica ausente"
+    if len(nome) > 50 or len(re.findall(r"[^\W\d_]", nome)) < 3:
+        return f"nome suspeito para envio automático: '{nome}'"
+    if not 200 <= len(mensagem) <= 1500:
+        return f"tamanho fora do padrão ({len(mensagem)} caracteres)"
+    linhas = [l.strip() for l in mensagem.splitlines() if len(l.strip()) > 20]
+    if len(linhas) != len(set(linhas)):
+        return "parágrafo repetido"
+    return None
+
+
+def _registrar(texto: str) -> None:
+    """Imprime e grava no log do dia (logs/automatico_AAAA-MM-DD.log)."""
+    linha = f"{datetime.now():%H:%M:%S} {texto}"
+    print(linha, flush=True)
+    try:
+        PASTA_LOGS.mkdir(exist_ok=True)
+        with (PASTA_LOGS / f"automatico_{datetime.now():%Y-%m-%d}.log").open(
+                "a", encoding="utf-8") as f:
+            f.write(linha + "\n")
+    except OSError:
+        pass
+
+
+def conectar_whatsapp(segundos: int = 300) -> bool:
+    """Abre o WhatsApp Web com o perfil do script e espera o login (QR Code)."""
+    from selenium.webdriver.common.by import By
+    sessao = SessaoWeb()
+    try:
+        driver = sessao._garantir_driver()
+        driver.get("https://web.whatsapp.com")
+        print(f"Escaneie o QR Code no Chrome (até {segundos // 60} min)...")
+        fim = time.time() + segundos
+        while time.time() < fim:
+            if driver.find_elements(By.CSS_SELECTOR, "#pane-side, #side"):
+                time.sleep(5)  # deixa sincronizar
+                print("[OK] WhatsApp Web conectado. O envio automático já pode rodar.")
+                return True
+            time.sleep(1)
+        print("[ERRO] Não conectou a tempo. Rode --conectar de novo.")
+        return False
+    except EnvioEmAndamento as exc:
+        print(f"[BLOQUEADO] {exc}")
+        return False
+    finally:
+        sessao.fechar()
+
+
+def rodar_automatico(planilha: Planilha, args: argparse.Namespace,
+                     mensagens: dict) -> int:
+    """Envia sozinho a cota do dia para pendentes com celular.
+
+    Para tudo (sem insistir) se: fora do dia útil/janela, WhatsApp
+    desconectado, envio sem confirmação na conversa, ou 2 falhas técnicas
+    seguidas. Números sem WhatsApp viram status 'sem_whatsapp'.
+    Retorna o número de mensagens enviadas.
+    """
+    agora = datetime.now()
+    if not dia_util(agora):
+        _registrar("[AUTO] Hoje não é dia útil (fim de semana/feriado) — nada a fazer.")
+        return 0
+    if not dentro_da_janela(args.hora_inicio, args.hora_fim, agora):
+        _registrar(f"[AUTO] Fora da janela {args.hora_inicio}h–{args.hora_fim}h — nada a fazer.")
+        return 0
+
+    try:
+        trava = TravaEnvio().__enter__()
+    except EnvioEmAndamento as exc:
+        _registrar(f"[AUTO] {exc}")
+        return 0
+
+    enviados = 0
+    sessao = SessaoWeb()
+    try:
+        cota = args.limite_dia - envios_hoje()
+        fila = [c for c in planilha.contatos
+                if c["status"] == PENDENTE and eh_celular(c["telefone"])]
+        _registrar(f"[AUTO] Início: cota {max(cota, 0)}, {len(fila)} pendente(s) com celular.")
+        if cota <= 0 or not fila:
+            return 0
+
+        intervalo_alvo = random.randint(args.intervalo_min, args.intervalo_max)
+        falhas_seguidas = 0
+        for contato in fila:
+            if enviados >= cota:
+                break
+            if not dentro_da_janela(args.hora_inicio, args.hora_fim):
+                _registrar("[AUTO] Janela de horário encerrou — parando.")
+                break
+            if enviado_hoje(contato["telefone"]):
+                continue
+
+            mensagem = montar_texto(contato, mensagens)
+            problema = validar_mensagem(mensagem, contato)
+            if problema:
+                _registrar(f"[PULADO] {contato['clinica'][:50]}: {problema}")
+                continue
+
+            restante = segundos_de_espera(ultimo_envio(), intervalo_alvo, datetime.now())
+            if restante:
+                time.sleep(restante)
+
+            ok = sessao.enviar(contato, mensagem, confirmar=False)
+            if not ok and sessao.ultimo_erro == SessaoWeb.TEXTO_NAO_CONFERE:
+                _registrar(f"[RETENTATIVA] {contato['clinica'][:50]}: texto não conferiu")
+                ok = sessao.enviar(contato, mensagem, confirmar=False)
+
+            if ok:
+                atualizar_historico(contato, mensagem, "automatico", INICIAL)
+                marcar_enviado(contato, planilha, INICIAL)
+                enviados += 1
+                falhas_seguidas = 0
+                intervalo_alvo = random.randint(args.intervalo_min, args.intervalo_max)
+                if sessao.confirmado:
+                    _registrar(f"[ENVIADO] {contato['clinica'][:50]} (+{contato['telefone']})")
+                else:
+                    _registrar(f"[PARADO] {contato['clinica'][:50]}: ENTER dado mas a "
+                               "mensagem não foi conferida na conversa. Verifique "
+                               "manualmente antes do próximo envio.")
+                    break
+                continue
+
+            erro = sessao.ultimo_erro
+            if erro == SessaoWeb.SEM_WHATSAPP:
+                contato["status"] = "sem_whatsapp"
+                contato["atualizado_em"] = datetime.now().isoformat(timespec="seconds")
+                planilha.salvar()
+                _registrar(f"[SEM WHATSAPP] {contato['clinica'][:50]} — removido da fila.")
+                continue
+            if erro == SessaoWeb.DESLOGADO:
+                _registrar("[PARADO] WhatsApp Web desconectado — abra o Chrome do "
+                           "script e escaneie o QR Code (rode --modo web uma vez).")
+                break
+            falhas_seguidas += 1
+            _registrar(f"[FALHA] {contato['clinica'][:50]}: {erro} "
+                       f"({falhas_seguidas} seguida(s))")
+            if falhas_seguidas >= 2:
+                _registrar("[PARADO] 2 falhas seguidas — interrompido por segurança.")
+                break
+    finally:
+        sessao.fechar()
+        trava.__exit__(None, None, None)
+        _registrar(f"[AUTO] Fim: {enviados} enviada(s) hoje nesta execução; "
+                   f"total do dia {envios_hoje()}/{args.limite_dia}.")
+    return enviados
+
+
+# ---------------------------------------------------------------------------
+# 7. CLI
 # ---------------------------------------------------------------------------
 
 def _criar_parser() -> argparse.ArgumentParser:
@@ -1071,6 +1408,11 @@ def _criar_parser() -> argparse.ArgumentParser:
     parser.add_argument("--clinica", "--status", dest="clinica", default=None,
                         help="Filtra pelo nome da clínica (substring, ex.: 'Ferraz'). "
                              "--status é um alias antigo.")
+    parser.add_argument("--automatico", action="store_true",
+                        help="Envio SEM operador (para o agendador): pendentes com "
+                             "celular até --limite-dia, com todas as checagens")
+    parser.add_argument("--conectar", action="store_true",
+                        help="Abre o WhatsApp Web do script para escanear o QR Code")
     parser.add_argument("--reset", action="store_true",
                         help="Reabre como 'pendente' quem recebeu e não respondeu "
                              "(nunca reabre opt-out nem quem respondeu)")
@@ -1094,6 +1436,13 @@ def main() -> None:
 
     planilha = carregar_planilha(Path(args.arquivo))
     contatos = planilha.contatos
+
+    if args.automatico:
+        rodar_automatico(planilha, args, mensagens)
+        return
+    if args.conectar:
+        conectar_whatsapp()
+        return
 
     if not contatos:
         if args.modo == "preview" and not (args.reset or args.respostas or args.listar):

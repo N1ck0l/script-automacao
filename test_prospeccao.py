@@ -504,6 +504,152 @@ class TestTextoConfere(unittest.TestCase):
         self.assertFalse(pw.texto_confere("oi " + self.MSG, self.MSG))
 
 
+class TestFeriados(unittest.TestCase):
+    def test_moveis_2026(self):
+        from datetime import date
+        for d in [date(2026, 2, 16), date(2026, 2, 17), date(2026, 2, 18),
+                  date(2026, 4, 3), date(2026, 6, 4)]:  # Carnaval, Cinzas, Sexta Santa, Corpus
+            self.assertTrue(pw.eh_feriado(d), d)
+
+    def test_fixos_e_locais(self):
+        from datetime import date
+        for d in [date(2026, 11, 20), date(2026, 12, 25), date(2027, 3, 17),
+                  date(2026, 7, 8)]:
+            self.assertTrue(pw.eh_feriado(d), d)
+
+    def test_dia_util_ignora_feriado(self):
+        self.assertFalse(pw.dia_util(datetime(2026, 11, 20, 9)))  # sexta, feriado
+        self.assertTrue(pw.dia_util(datetime(2026, 11, 19, 9)))   # quinta comum
+
+
+class TestValidarMensagem(unittest.TestCase):
+    CONTATO = {"clinica": "MB Odontologia | Dentista | Urgência", "bairro": "Centro",
+               "cidade": "Aracaju"}
+
+    def test_mensagem_gerada_passa(self):
+        for _ in range(30):
+            self.assertIsNone(pw.validar_mensagem(pw.montar_texto(self.CONTATO),
+                                                  self.CONTATO))
+
+    def test_problemas_sao_detectados(self):
+        boa = pw.montar_texto(self.CONTATO)
+        casos = {
+            boa + " {clinica}": "token",
+            boa + " Fale com a PROIMAGEM": "proibido",
+            boa + " posso mandar uma prévia": "proibido",
+            boa.replace("MB Odontologia", "MB Odontologia | Dentista"): "SEO",
+            boa.replace("MB Odontologia", "Outra Clínica"): "ausente",
+            "Olá! Conhece a MB Odontologia? Vamos conversar.": "tamanho",
+        }
+        for msg, trecho in casos.items():
+            problema = pw.validar_mensagem(msg, self.CONTATO)
+            self.assertIsNotNone(problema, trecho)
+            self.assertIn(trecho.lower(), problema.lower())
+
+    def test_paragrafo_duplicado(self):
+        boa = pw.montar_texto(self.CONTATO)
+        paragrafo = [l for l in boa.splitlines() if len(l) > 20][0]
+        self.assertIn("repetido", pw.validar_mensagem(boa + "\n" + paragrafo,
+                                                      self.CONTATO))
+
+
+class _SessaoFalsa:
+    """Simula o WhatsApp Web: cada chamada consome um resultado do roteiro."""
+    roteiro: list = []
+    chamadas: list = []
+
+    def __init__(self):
+        self.ultimo_erro = None
+        self.confirmado = False
+
+    def enviar(self, contato, mensagem, permitir_reenvio=False, confirmar=True):
+        assert confirmar is False  # modo automático nunca pergunta
+        _SessaoFalsa.chamadas.append(contato["telefone"])
+        ok, erro, confirmado = _SessaoFalsa.roteiro.pop(0)
+        self.ultimo_erro, self.confirmado = erro, confirmado
+        return ok
+
+    def fechar(self):
+        pass
+
+
+class TestModoAutomatico(BasePw):
+    def setUp(self):
+        super().setUp()
+        self._orig = (pw.SessaoWeb.__dict__.copy(), pw.ARQUIVO_TRAVA, pw.PASTA_LOGS,
+                      pw.dia_util, pw.SessaoWeb)
+        pw.ARQUIVO_TRAVA = self.tmpdir / ".envio.lock"
+        pw.PASTA_LOGS = self.tmpdir / "logs"
+        pw.dia_util = lambda agora=None: True
+        falsa = type("SessaoFalsa", (_SessaoFalsa,), {
+            k: getattr(pw.SessaoWeb, k) for k in
+            ("SEM_WHATSAPP", "DESLOGADO", "TEXTO_NAO_CONFERE", "NAO_CONFIRMADO",
+             "TECNICO", "BLOQUEADO", "CANCELADO")})
+        pw.SessaoWeb = falsa
+        _SessaoFalsa.chamadas = []
+        self.planilha = pw.Planilha(self.tmpdir / "prospeccao.csv")
+        for i, nome in enumerate(["Clínica Alfa", "Clínica Beta", "Clínica Gama",
+                                  "Clínica Delta"]):
+            self.planilha.adicionar(_contato(clinica=nome, bairro="Centro",
+                                             telefone=f"557999000000{i}"))
+        self.planilha.adicionar(_contato(clinica="Fixo", telefone="557932000000"))
+        import argparse
+        self.args = argparse.Namespace(limite_dia=2, hora_inicio=0, hora_fim=24,
+                                       intervalo_min=0, intervalo_max=0)
+
+    def tearDown(self):
+        _, pw.ARQUIVO_TRAVA, pw.PASTA_LOGS, pw.dia_util, pw.SessaoWeb = self._orig
+        super().tearDown()
+
+    def _rodar(self, roteiro):
+        _SessaoFalsa.roteiro = list(roteiro)
+        with redirect_stdout(io.StringIO()) as saida:
+            n = pw.rodar_automatico(self.planilha, self.args, pw.carregar_mensagens())
+        return n, saida.getvalue()
+
+    def test_respeita_cota_e_pula_fixo_e_sem_whatsapp(self):
+        sem = (False, pw.SessaoWeb.SEM_WHATSAPP, False)
+        ok = (True, None, True)
+        n, log = self._rodar([sem, ok, ok])
+        self.assertEqual(n, 2)                                  # cota = 2
+        self.assertNotIn("557932000000", _SessaoFalsa.chamadas)  # fixo nunca tentado
+        self.assertEqual(self.planilha.contatos[0]["status"], "sem_whatsapp")
+        self.assertEqual(pw.envios_hoje(), 2)
+        self.assertFalse(pw.ARQUIVO_TRAVA.exists())             # trava liberada
+
+    def test_para_se_desconectado(self):
+        n, log = self._rodar([(False, pw.SessaoWeb.DESLOGADO, False)])
+        self.assertEqual(n, 0)
+        self.assertIn("desconectado", log)
+        self.assertEqual(len(_SessaoFalsa.chamadas), 1)
+
+    def test_para_apos_duas_falhas_seguidas(self):
+        tec = (False, pw.SessaoWeb.TECNICO, False)
+        n, log = self._rodar([tec, tec])
+        self.assertEqual(n, 0)
+        self.assertIn("2 falhas seguidas", log)
+        self.assertEqual(len(_SessaoFalsa.chamadas), 2)
+
+    def test_para_se_envio_nao_foi_conferido(self):
+        self.args.limite_dia = 10
+        n, log = self._rodar([(True, pw.SessaoWeb.NAO_CONFIRMADO, False)])
+        self.assertEqual(n, 1)                      # registrado (ENTER foi dado)
+        self.assertIn("[PARADO]", log)
+        self.assertEqual(len(_SessaoFalsa.chamadas), 1)  # não seguiu adiante
+
+    def test_retenta_uma_vez_se_texto_nao_conferir(self):
+        n, _ = self._rodar([(False, pw.SessaoWeb.TEXTO_NAO_CONFERE, False),
+                            (True, None, True), (True, None, True)])
+        self.assertEqual(n, 2)
+        self.assertEqual(_SessaoFalsa.chamadas[0], _SessaoFalsa.chamadas[1])
+
+    def test_nao_faz_nada_em_feriado_ou_fora_da_janela(self):
+        pw.dia_util = lambda agora=None: False
+        n, log = self._rodar([])
+        self.assertEqual((n, _SessaoFalsa.chamadas), (0, []))
+        self.assertIn("não é dia útil", log)
+
+
 class TestReset(unittest.TestCase):
     def test_reabre_so_quem_nao_engajou(self):
         contatos = [

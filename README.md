@@ -14,7 +14,8 @@ banimento de chip pela Meta.
 | `mensagens.json` | Textos da abordagem e do follow-up (spintax + tokens) — edite aqui, não no código |
 | `minerador_maps.py` | Minerador de empresas no Google Maps (Playwright) → `prospeccao.csv` |
 | `prospeccao.csv` | Contatos (`clinica,bairro,cidade,telefone,site,avaliacoes,status,resposta,atualizado_em,ultimo_envio,followups`) |
-| `test_prospeccao.py` + `test_minerador.py` | 69 testes do núcleo anti-ban e da mineração (unittest, zero dependências) |
+| `test_prospeccao.py` + `test_minerador.py` | 92 testes do núcleo anti-ban, do modo automático e da mineração (unittest, zero dependências) |
+| `logs/` | Log diário do modo automático (`automatico_AAAA-MM-DD.log`) |
 | `historico_envios.jsonl` | Auditoria: todo envio confirmado é registrado aqui |
 | `requirements.txt` | `playwright`, `selenium` (opcional) |
 
@@ -161,3 +162,37 @@ python prospeccao_whatsapp.py --listar      # vê a coluna RESPOSTA na tabela
   restrição de horário.
 - **Editar texto** (`[e]` na prévia): cole a mensagem (linhas vazias são
   mantidas) e termine com uma linha contendo apenas `.`.
+
+## Modo automático (agendado)
+
+```bash
+python prospeccao_whatsapp.py --automatico --limite-dia 10
+```
+
+Envia **sem operador** para os contatos `pendente` com **celular**, até a cota
+do dia. Agendado no Agendador de Tarefas do Windows como **"Prospeccao
+WhatsApp"**: segunda a sexta, 9h (se o PC estiver desligado às 9h, roda quando
+ligar — dentro da janela 8h–19h). O PC precisa estar ligado e com o usuário
+logado; o login do WhatsApp Web fica salvo em `.perfil_whatsapp_web/`.
+
+Checagens em cada etapa (a meta é erro zero, então na dúvida ele **não envia**):
+
+| Etapa | Checagem | Se falhar |
+|---|---|---|
+| Antes de começar | Dia útil (fim de semana e feriados nacionais, de SE e de Aracaju), janela de horário, cota do dia | Não faz nada |
+| Antes de começar | Nenhum outro envio rodando (`.envio.lock`) | Não faz nada |
+| Texto gerado | Sem tokens soltos, sem "PROIMAGEM"/"prévia", nome limpo presente, tamanho normal, sem parágrafo repetido | Pula o contato |
+| Abrir conversa | Número sem WhatsApp | Marca `sem_whatsapp` e segue |
+| Abrir conversa | WhatsApp Web desconectado (QR Code) | **Para tudo** |
+| Caixa de texto | Contém **exatamente** o texto gerado (nada faltando, nada duplicado) | Limpa a caixa, tenta 1 vez de novo |
+| Logo antes do ENTER | Número não recebeu nada hoje; texto ainda confere | Não envia |
+| Depois do ENTER | Uma bolha nova com exatamente o texto aparece na conversa | Registra e **para tudo** |
+| Geral | 2 falhas técnicas seguidas | **Para tudo** |
+
+Acompanhe pelo log do dia em `logs/` e por `--listar`. Para pausar:
+`Disable-ScheduledTask -TaskName "Prospeccao WhatsApp"` (PowerShell); para
+voltar: `Enable-ScheduledTask -TaskName "Prospeccao WhatsApp"`.
+
+Se o log disser **"WhatsApp Web desconectado"**, rode
+`python prospeccao_whatsapp.py --conectar` e escaneie o QR Code no Chrome que
+abrir (WhatsApp > Aparelhos conectados). Ele fecha sozinho quando conectar.
