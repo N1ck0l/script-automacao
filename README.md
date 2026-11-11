@@ -219,7 +219,9 @@ Agendado como **"Prospeccao Acompanhamento"** às 12h, 14h, 16h e 18h (dias
 - **avisa na hora** (seu WhatsApp + Windows) quando uma **pessoa** responde,
   com o trecho da resposta — para você assumir a conversa rápido;
 - envia a 2ª etapa para quem respondeu (**apresentação** na curta, **resumo**
-  na completa — contam no limite diário);
+  na completa). **Não contam no limite diário** — senão o envio das 10h30
+  esgotaria a cota e a resposta ficaria adiada; têm um teto próprio igual a
+  `--limite-dia` por dia;
 - em robôs com menu, escolhe a opção **"falar com atendente"** (uma vez por
   clínica; não conta no limite diário);
 - marca `nao_contatar` quem pedir para não ser contatado.

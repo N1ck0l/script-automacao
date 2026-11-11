@@ -930,7 +930,32 @@ class TestAcoesEAvisos(TestModoAutomatico):
         self.assertEqual(c1["resposta"], "aguardando")      # volta a monitorar
         self.assertEqual(c2["menu"], "respondido")
         self.assertEqual(c2["resposta"], "resposta automatica")  # menu não muda resposta
-        self.assertEqual(pw.envios_hoje(), 1)                # menu não conta no limite
+        self.assertEqual(pw.envios_hoje(), 0)    # nem menu nem apresentação contam no limite
+        self.assertEqual(pw.segundas_etapas_hoje(), 1)
+
+    def test_segunda_etapa_sai_mesmo_com_cota_esgotada(self):
+        self.args.limite_dia = 1
+        c0 = self.planilha.contatos[1]
+        pw.atualizar_historico(c0, "texto", "automatico")   # cota de novos esgotada
+        self.assertEqual(pw.envios_hoje(), 1)
+        c = self._contato_enviado(variante="curta", etapa="abertura", resposta="respondeu")
+        self.planilha.salvar()
+        _SessaoFalsa.roteiro = [(True, None, True)]
+        with redirect_stdout(io.StringIO()):
+            feitos = pw.executar_acoes({"acoes": [("apresentacao", c["telefone"], None)]},
+                                       self.planilha, pw.SessaoWeb(),
+                                       pw.carregar_mensagens(), self.args)
+        self.assertEqual(len(feitos), 1)
+        self.assertEqual(c["etapa"], "apresentacao")
+        # teto próprio: a 2ª apresentação do dia (limite 1) fica adiada
+        c2 = self.planilha.contatos[2]
+        c2.update(status="enviado", variante="curta", etapa="abertura", resposta="respondeu")
+        with redirect_stdout(io.StringIO()):
+            feitos = pw.executar_acoes({"acoes": [("apresentacao", c2["telefone"], None)]},
+                                       self.planilha, pw.SessaoWeb(),
+                                       pw.carregar_mensagens(), self.args)
+        self.assertEqual(feitos, [])
+        self.assertEqual(c2["etapa"], "abertura")
 
     def test_aviso_imediato_de_resposta(self):
         self.args.resumo_para = "79981677954"

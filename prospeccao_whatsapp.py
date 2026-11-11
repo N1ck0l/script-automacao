@@ -451,7 +451,12 @@ def ler_historico() -> list[dict]:
     return registros
 
 
-TIPOS_FORA_DO_LIMITE = {"menu"}  # escolher "falar com atendente" no robô
+# Fora do limite diário: escolher "falar com atendente" no robô e a 2ª etapa
+# (apresentação/resumo), que só vai para quem respondeu. Se contasse, o envio
+# das 10h30 esgotaria a cota e a resposta a quem falou com a gente ficaria
+# adiada dia após dia. A 2ª etapa tem um teto próprio (segundas_etapas_hoje).
+SEGUNDAS_ETAPAS = {"apresentacao", "resumo"}
+TIPOS_FORA_DO_LIMITE = {"menu"} | SEGUNDAS_ETAPAS
 
 
 def envios_hoje() -> int:
@@ -459,6 +464,14 @@ def envios_hoje() -> int:
     return sum(1 for r in ler_historico()
                if str(r.get("timestamp", "")).startswith(hoje)
                and r.get("tipo") not in TIPOS_FORA_DO_LIMITE)
+
+
+def segundas_etapas_hoje() -> int:
+    """Apresentações/resumos enviados hoje (teto de segurança próprio)."""
+    hoje = datetime.now().date().isoformat()
+    return sum(1 for r in ler_historico()
+               if str(r.get("timestamp", "")).startswith(hoje)
+               and r.get("tipo") in SEGUNDAS_ETAPAS)
 
 
 def enviado_hoje(telefone: str) -> str | None:
@@ -1777,8 +1790,9 @@ def executar_acoes(relatorio: dict, planilha: Planilha, sessao: "SessaoWeb",
                                   contato.get("cidade") or CIDADE_PADRAO)
         if tipo in ("apresentacao", "resumo"):
             rotulo = "apresentação" if tipo == "apresentacao" else "resumo"
-            if envios_hoje() >= args.limite_dia:
-                _registrar(f"[ADIADO] {rotulo} para {nome}: limite do dia atingido.")
+            if segundas_etapas_hoje() >= args.limite_dia:  # teto de segurança
+                _registrar(f"[ADIADO] {rotulo} para {nome}: já foram "
+                           f"{args.limite_dia} apresentações/resumos hoje.")
                 continue
             montar = montar_apresentacao if tipo == "apresentacao" else montar_resumo_completa
             mensagem = montar(contato, mensagens)
