@@ -59,9 +59,12 @@ PERFIL_SELENIUM = BASE_DIR / ".perfil_whatsapp_web"
 
 COLUNAS = ["clinica", "bairro", "cidade", "telefone", "site", "avaliacoes",
            "status", "resposta", "atualizado_em", "ultimo_envio", "followups",
-           "variante", "etapa", "menu"]
+           "variante", "etapa", "menu", "versao_textos"]
 # variante: teste A/B ("curta" | "completa")
 # etapa: "abertura" (curta enviada) | "apresentacao" (texto completo enviado)
+#        | "resumo" (resumo enviado depois que a pessoa respondeu à completa)
+# versao_textos: "versao" do mensagens.json usada no 1º envio (o A/B compara
+#        só contatos da versão atual; vazio = textos antigos)
 # menu: "respondido" quando o script já escolheu "falar com atendente" no robô
 
 CIDADE_PADRAO = "Aracaju"
@@ -215,7 +218,7 @@ def salvar_contatos(caminho: Path, contatos: list[dict],
 
 CHAVES_MENSAGENS = ["saudacoes", "ganchos", "autoridades", "cases", "ctas",
                     "estruturas", "followups", "aberturas", "estruturas_apresentacao",
-                    "ctas_apresentacao"]
+                    "ctas_apresentacao", "estruturas_resumo"]
 _CACHE_MENSAGENS: dict[Path, dict] = {}
 
 
@@ -405,6 +408,15 @@ def montar_apresentacao(contato: dict, mensagens: dict | None = None,
     contexto.update(case=random.choice(m["cases"]),
                     cta_apresentacao=random.choice(m["ctas_apresentacao"]))
     return resolver_spintax(random.choice(m["estruturas_apresentacao"]), contexto)
+
+
+def montar_resumo_completa(contato: dict, mensagens: dict | None = None,
+                           agora: datetime | None = None) -> str:
+    """2ª etapa da variante completa: o resumo prometido no CTA ("te mando um
+    resumo de 1 minuto"), enviado quando uma pessoa responde."""
+    m = mensagens or carregar_mensagens()
+    return resolver_spintax(random.choice(m["estruturas_resumo"]),
+                            _contexto(contato, m, agora))
 
 
 def montar_texto_followup(contato: dict, mensagens: dict | None = None,
@@ -1283,7 +1295,8 @@ NOMES_GENERICOS = {
 
 
 LIMITES_TAMANHO = {"completa": (200, 1500), "curta": (80, 400),
-                   "apresentacao": (150, 1300), "followup": (60, 500)}
+                   "apresentacao": (150, 1300), "resumo": (150, 1300),
+                   "followup": (60, 500)}
 
 
 def validar_mensagem(mensagem: str, contato: dict, tipo: str = "completa") -> str | None:
@@ -1302,7 +1315,7 @@ def validar_mensagem(mensagem: str, contato: dict, tipo: str = "completa") -> st
     for proibido in TEXTOS_PROIBIDOS:
         if proibido in baixo:
             return f"texto proibido: '{proibido}'"
-    if tipo != "apresentacao" and nome not in mensagem:
+    if tipo not in ("apresentacao", "resumo") and nome not in mensagem:
         return "nome da clínica ausente"
     if chave_clinica({"clinica": nome}) in NOMES_GENERICOS:
         return f"nome genérico, sem a marca da clínica: '{nome}' (corrija no CSV)"
@@ -1568,7 +1581,7 @@ def verificar_conversas(planilha: Planilha, sessao: "SessaoWeb",
                  if c["status"] == ENVIADO and c["telefone"] in historico
                  and ((c.get("resposta") or "") in RESPOSTAS_EM_ABERTO
                       # pessoa respondeu à abertura curta e a apresentação ainda não foi
-                      or (c.get("resposta") == "respondeu" and c.get("etapa") == "abertura"))}
+                      or (c.get("resposta") == "respondeu" and _segunda_etapa(c)))}
     relatorio = {"conferidas": 0, "nao_verificaveis": 0, "problemas": [], "respostas": [],
                  "optouts": [], "automaticas": [], "erro": None,
                  "acoes": [], "respostas_texto": []}
@@ -1607,9 +1620,8 @@ def verificar_conversas(planilha: Planilha, sessao: "SessaoWeb",
             resposta = classificar_resposta(bolhas, enviadas, desde)
             primeiro = _data(historico[tel][0].get("timestamp", "")) or desde
             recebidas = mensagens_recebidas(bolhas, enviadas, primeiro)
-            if (resposta == "respondeu" and contato.get("variante") == "curta"
-                    and contato.get("etapa") == "abertura"):
-                relatorio["acoes"].append(("apresentacao", tel, None))
+            if resposta == "respondeu" and _segunda_etapa(contato):
+                relatorio["acoes"].append((_segunda_etapa(contato), tel, None))
             if resposta != "respondeu" and resposta != "sem interesse" \
                     and not contato.get("menu"):
                 digito = opcao_atendente([b["texto"] for b in recebidas])
@@ -1731,11 +1743,28 @@ def _envio_automatico(sessao: "SessaoWeb", contato: dict, mensagem: str,
     return sessao.ultimo_erro or SessaoWeb.TECNICO
 
 
+def _segunda_etapa(contato: dict) -> str | None:
+    """Qual mensagem automática a pessoa recebe ao responder, se alguma:
+
+    - curta, depois da abertura -> "apresentacao";
+    - completa, depois do texto completo -> "resumo" (só para contatos dos
+      textos versionados, cujo CTA promete o resumo; quem recebeu os textos
+      antigos e respondeu é atendido à mão, como antes).
+    """
+    variante, etapa = contato.get("variante"), contato.get("etapa")
+    if variante == "curta" and etapa == "abertura":
+        return "apresentacao"
+    if variante == "completa" and etapa == "apresentacao" and contato.get("versao_textos"):
+        return "resumo"
+    return None
+
+
 def executar_acoes(relatorio: dict, planilha: Planilha, sessao: "SessaoWeb",
                    mensagens: dict, args: argparse.Namespace) -> list[str]:
     """Executa o que a leitura das conversas pediu:
 
     - "apresentacao": pessoa respondeu à abertura curta -> envia o texto completo;
+    - "resumo": pessoa respondeu à mensagem completa -> envia o resumo prometido;
     - "menu": robô com menu -> escolhe "falar com atendente" (uma vez por clínica).
     """
     feitos: list[str] = []
@@ -1746,14 +1775,16 @@ def executar_acoes(relatorio: dict, planilha: Planilha, sessao: "SessaoWeb",
             continue
         nome = nome_para_mensagem(contato["clinica"], contato.get("bairro", ""),
                                   contato.get("cidade") or CIDADE_PADRAO)
-        if tipo == "apresentacao":
+        if tipo in ("apresentacao", "resumo"):
+            rotulo = "apresentação" if tipo == "apresentacao" else "resumo"
             if envios_hoje() >= args.limite_dia:
-                _registrar(f"[ADIADO] apresentação para {nome}: limite do dia atingido.")
+                _registrar(f"[ADIADO] {rotulo} para {nome}: limite do dia atingido.")
                 continue
-            mensagem = montar_apresentacao(contato, mensagens)
-            problema = validar_mensagem(mensagem, contato, "apresentacao")
+            montar = montar_apresentacao if tipo == "apresentacao" else montar_resumo_completa
+            mensagem = montar(contato, mensagens)
+            problema = validar_mensagem(mensagem, contato, tipo)
             if problema:
-                _registrar(f"[PULADO] apresentação para {nome}: {problema}")
+                _registrar(f"[PULADO] {rotulo} para {nome}: {problema}")
                 continue
         else:
             mensagem = str(dado)
@@ -1769,10 +1800,11 @@ def executar_acoes(relatorio: dict, planilha: Planilha, sessao: "SessaoWeb",
                 break
             continue
         atualizar_historico(contato, mensagem, "automatico", tipo)
-        if tipo == "apresentacao":
+        if tipo in ("apresentacao", "resumo"):
             marcar_enviado(contato, planilha, tipo)  # volta a "aguardando"
-            contato["etapa"] = "apresentacao"
-            feitos.append(f"apresentação enviada para {nome}")
+            contato["etapa"] = tipo
+            feitos.append(f"{'apresentação enviada' if tipo == 'apresentacao' else 'resumo enviado'}"
+                          f" para {nome}")
         else:
             contato["menu"] = "respondido"
             feitos.append(f"opção {mensagem} (falar com atendente) escolhida no robô de {nome}")
@@ -1801,24 +1833,33 @@ def avisar_respostas(relatorio: dict, sessao: "SessaoWeb", destino: str | None) 
                       ", ".join([n for n, _ in respostas] + optouts))
 
 
-def estatisticas_ab(contatos: list[dict]) -> str:
-    """Linha do resumo com o resultado do teste A/B até agora."""
+def estatisticas_ab(contatos: list[dict], versao: str = "") -> str:
+    """Linha do resumo com o resultado do teste A/B até agora.
+
+    Com `versao`, conta só os contatos abordados com essa versão dos textos
+    (mudar os textos no meio do teste misturaria resultados)."""
     partes = []
     for variante in ("curta", "completa"):
         grupo = [c for c in contatos if c.get("variante") == variante
-                 and c["status"] in (ENVIADO, NAO_CONTATAR)]
+                 and c["status"] in (ENVIADO, NAO_CONTATAR)
+                 and (not versao or c.get("versao_textos") == versao)]
         humanas = sum(1 for c in grupo
                       if c.get("resposta") in ("respondeu", "sem interesse")
+                      or c.get("etapa") == "resumo"
                       or c.get("etapa") == "apresentacao" and variante == "curta")
         if grupo:
             partes.append(f"{variante}: {humanas}/{len(grupo)} responderam")
-    return "Teste A/B — " + " | ".join(partes) if partes else ""
+    if not partes:
+        return ""
+    titulo = f"Teste A/B (textos de {versao})" if versao else "Teste A/B"
+    return f"{titulo} — " + " | ".join(partes)
 
 
 def rodar_acompanhamento(planilha: Planilha, args: argparse.Namespace,
                          mensagens: dict) -> None:
     """Rodada curta ao longo do dia (agendada): lê respostas, avisa na hora
-    quando uma pessoa responde, envia a apresentação da variante curta e
+    quando uma pessoa responde, envia a 2ª etapa (apresentação da curta ou
+    resumo da completa) e
     escolhe "falar com atendente" em menus de robô. Não prospecta ninguém novo."""
     agora = datetime.now()
     if not dia_util(agora) or not dentro_da_janela(args.hora_inicio, args.hora_fim, agora):
@@ -1955,6 +1996,7 @@ def rodar_automatico(planilha: Planilha, args: argparse.Namespace,
                 if origem == "novo":
                     contato["variante"] = variante
                     contato["etapa"] = "abertura" if variante == "curta" else "apresentacao"
+                    contato["versao_textos"] = str(mensagens.get("versao", ""))
                     planilha.salvar()
                 contatadas.add(chave_clinica(contato))
                 rotulo = nome_para_mensagem(contato["clinica"], contato.get("bairro", ""),
@@ -2011,7 +2053,8 @@ def rodar_automatico(planilha: Planilha, args: argparse.Namespace,
         pendentes = sum(1 for c in planilha.contatos if c["status"] == PENDENTE)
         resumo = montar_resumo(enviadas, sem_whatsapp, puladas, verificacao,
                                pendentes, args.limite_dia, parada,
-                               acoes=acoes_feitas, ab=estatisticas_ab(planilha.contatos))
+                               acoes=acoes_feitas, ab=estatisticas_ab(planilha.contatos,
+                                                 str(mensagens.get("versao", ""))))
         resumo_ok = False
         destino = getattr(args, "resumo_para", None)
         if destino and (parada is None or "desconectado" not in parada):

@@ -114,7 +114,9 @@ Requisitos: Python 3.10+. O modo `manual` (padrão) não precisa de nada instala
 - `ganchos`, `autoridades`, `cases`, `ctas`: uma opção de cada é sorteada.
 - `estruturas`: como as partes são montadas (`{saudacao}`, `{gancho}`, ...).
 - `followups`: mensagens curtas de retomada.
-- `aberturas`: variante curta do teste A/B; `estruturas_apresentacao` + `ctas_apresentacao`: 2ª etapa, enviada quando uma pessoa responde.
+- `aberturas`: variante curta do teste A/B; `estruturas_apresentacao` + `ctas_apresentacao`: 2ª etapa da curta, enviada quando uma pessoa responde.
+- `estruturas_resumo`: 2ª etapa da completa — o resumo prometido no CTA ("te mando um resumo"), enviado quando uma pessoa responde.
+- `versao`: identificador dos textos (ex.: `"2026-11-11"`). **Mude sempre que reescrever as mensagens**: ela é gravada na coluna `versao_textos` do CSV no 1º envio, e o resumo do teste A/B conta só os contatos da versão atual.
 - Token `{nota}`: nota do Google (só existe se ≥ 4,5; textos com `{nota}` são usados só nesses casos).
 - Tokens: `{clinica}`, `{bairro}`, `{cidade}` e `{local}` — que vira
   `no <bairro>` ou, quando o bairro está vazio, `em <cidade>`.
@@ -185,12 +187,17 @@ Começa às **10h30** + um atraso sorteado de 0 a `--atraso-max` minutos (fora d
 pico da recepção, que é logo cedo).
 
 **Teste A/B** (coluna `variante`, fixa por número, metade para cada lado):
-- `curta`: uma pergunta simples para a recepção ("Quem cuida da parte de
-  gestão aí?"). Quando uma **pessoa** responde, o script envia sozinho a
+- `curta`: uma pergunta curta pedindo permissão ("posso te contar o que
+  faço?"). Quando uma **pessoa** responde, o script envia sozinho a
   **apresentação** (`estruturas_apresentacao`) e a coluna `etapa` vira
   `apresentacao`;
-- `completa`: a mensagem completa de sempre.
-O resumo diário mostra quantas responderam em cada variante.
+- `completa`: a mensagem completa, terminando com a oferta de um resumo.
+  Quando uma **pessoa** responde, o script envia sozinho o **resumo**
+  (`estruturas_resumo`) e a `etapa` vira `resumo`. Só vale para contatos
+  abordados com textos versionados (`versao_textos` preenchida); quem recebeu
+  os textos antigos continua sendo atendido à mão.
+O resumo diário mostra quantas responderam em cada variante, contando só a
+versão atual dos textos.
 
 **Personalização**: com nota no Google ≥ 4,5, alguns textos elogiam a nota
 ("Vi as 4,9 estrelas da MB Odontologia no Google").
@@ -211,7 +218,8 @@ Agendado como **"Prospeccao Acompanhamento"** às 12h, 14h, 16h e 18h (dias
 úteis). Não prospecta ninguém novo; só:
 - **avisa na hora** (seu WhatsApp + Windows) quando uma **pessoa** responde,
   com o trecho da resposta — para você assumir a conversa rápido;
-- envia a **apresentação** da variante curta para quem respondeu;
+- envia a 2ª etapa para quem respondeu (**apresentação** na curta, **resumo**
+  na completa — contam no limite diário);
 - em robôs com menu, escolhe a opção **"falar com atendente"** (uma vez por
   clínica; não conta no limite diário);
 - marca `nao_contatar` quem pedir para não ser contatado.

@@ -833,6 +833,25 @@ class TestTextosAB(unittest.TestCase):
                 apresentacao = pw.montar_apresentacao(contato)
                 self.assertIsNone(pw.validar_mensagem(apresentacao, contato, "apresentacao"))
                 self.assertNotIn("{", apresentacao)
+                resumo = pw.montar_resumo_completa(contato)
+                self.assertIsNone(pw.validar_mensagem(resumo, contato, "resumo"), resumo)
+                self.assertNotIn("{", resumo)
+
+    def test_segunda_etapa(self):
+        self.assertEqual(pw._segunda_etapa({"variante": "curta", "etapa": "abertura"}),
+                         "apresentacao")
+        self.assertIsNone(pw._segunda_etapa({"variante": "curta", "etapa": "apresentacao"}))
+        self.assertEqual(pw._segunda_etapa({"variante": "completa", "etapa": "apresentacao",
+                                            "versao_textos": "2026-11-11"}), "resumo")
+        # textos antigos (CTA não prometia resumo): atendimento manual, como antes
+        self.assertIsNone(pw._segunda_etapa({"variante": "completa", "etapa": "apresentacao",
+                                             "versao_textos": ""}))
+        self.assertIsNone(pw._segunda_etapa({"variante": "completa", "etapa": "resumo",
+                                             "versao_textos": "2026-11-11"}))
+
+    def test_followup_nao_atribui_automacoes_a_clinica(self):
+        for _ in range(40):
+            self.assertNotIn("automações da ", pw.montar_texto_followup(self.COM_NOTA))
 
     def test_variante_fixa_por_numero_e_dividida(self):
         self.assertEqual(pw.variante_ab("5579999000001"), pw.variante_ab("5579999000001"))
@@ -890,6 +909,7 @@ class TestAcoesEAvisos(TestModoAutomatico):
             self.assertIn(c["variante"], ("curta", "completa"))
             self.assertEqual(c["etapa"],
                              "abertura" if c["variante"] == "curta" else "apresentacao")
+            self.assertEqual(c["versao_textos"], pw.carregar_mensagens()["versao"])
         variantes = [r.get("variante") for r in pw.ler_historico()]
         self.assertTrue(all(variantes))
 
@@ -932,6 +952,34 @@ class TestAcoesEAvisos(TestModoAutomatico):
         texto = pw.estatisticas_ab(self.planilha.contatos)
         self.assertIn("curta: 1/1", texto)
         self.assertIn("completa: 0/1", texto)
+
+    def test_estatisticas_ab_por_versao_dos_textos(self):
+        a, b, c = self.planilha.contatos[0], self.planilha.contatos[1], self.planilha.contatos[2]
+        a.update(status="enviado", variante="completa", etapa="resumo",
+                 resposta="aguardando", versao_textos="v2")
+        b.update(status="enviado", variante="completa", resposta="respondeu",
+                 versao_textos="")                       # textos antigos: fora da conta
+        c.update(status="enviado", variante="curta", etapa="abertura",
+                 resposta="aguardando", versao_textos="v2")
+        texto = pw.estatisticas_ab(self.planilha.contatos, "v2")
+        self.assertIn("textos de v2", texto)
+        self.assertIn("completa: 1/1", texto)
+        self.assertIn("curta: 0/1", texto)
+
+    def test_executa_resumo_da_completa(self):
+        c = self._contato_enviado(variante="completa", etapa="apresentacao",
+                                  resposta="respondeu", versao_textos="v2")
+        self.planilha.salvar()
+        _SessaoFalsa.roteiro = [(True, None, True)]
+        with redirect_stdout(io.StringIO()):
+            feitos = pw.executar_acoes({"acoes": [("resumo", c["telefone"], None)]},
+                                       self.planilha, pw.SessaoWeb(),
+                                       pw.carregar_mensagens(), self.args)
+        self.assertEqual(len(feitos), 1)
+        self.assertIn("resumo", feitos[0])
+        self.assertEqual(c["etapa"], "resumo")
+        self.assertEqual(c["resposta"], "aguardando")
+        self.assertEqual(pw.ler_historico()[-1]["tipo"], "resumo")
 
 
 class TestReset(unittest.TestCase):

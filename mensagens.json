@@ -1,5 +1,8 @@
 {
   "_ajuda": "Textos da prospecção. Tokens: {clinica} {a_clinica} {da_clinica} {bairro} {cidade} {local} {nota} {saudacao} {gancho} {autoridade} {case} {cta}. Spintax: {opção A|opção B}. {local} vira 'no <bairro>' ou, sem bairro, 'em <cidade>'. {nota} é a nota do Google (ex.: '4,9') e só existe se for 4,5 ou mais: textos com {nota} só são usados nesses casos. Tom: o menos invasivo possível — sem pressão, sem pedir reunião no 1º contato, com opt-out fácil.",
+  "versao": "2026-11-11",
+  "_versao": "Mude a 'versao' sempre que reescrever os textos: o resumo do teste A/B passa a contar só quem foi abordado com a versão atual (coluna versao_textos do CSV).",
+
   "saudacoes": {
     "manha": ["Bom dia! Tudo bem?", "Bom dia, tudo bem?"],
     "tarde": ["Boa tarde! Tudo bem?", "Boa tarde, tudo bem?"],
@@ -7,7 +10,7 @@
     "qualquer": ["Olá! Tudo bem?"]
   },
 
-  "_ab": "Teste A/B: cada clínica recebe, de forma fixa, a variante 'curta' (aberturas) ou 'completa' (estruturas). Na curta, quando uma PESSOA responde, o script envia a apresentação (estruturas_apresentacao).",
+  "_ab": "Teste A/B: cada clínica recebe, de forma fixa, a variante 'curta' (aberturas) ou 'completa' (estruturas). Quando uma PESSOA responde, o script envia a 2ª etapa: na curta, a apresentação (estruturas_apresentacao); na completa, o resumo prometido no CTA (estruturas_resumo).",
 
   "aberturas": [
     "{saudacao} Aqui é o Nickolas, trabalho com automação de processos para clínicas aqui em {cidade}. Vi o perfil {da_clinica} no Google — posso mandar uma ideia rapidinha?",
@@ -21,8 +24,13 @@
   ],
 
   "ctas_apresentacao": [
-    "Posso mostrar em 10 minutos (online ou presencial) como funcionaria aí? Qual dia e horário ficam melhores para vocês?",
-    "Consigo apresentar em uma conversa rápida de 10 minutos (online ou presencial). Qual seria o melhor dia e horário?"
+    "Se quiser ver funcionando, mostro em 10 minutos (online ou presencial), no dia que for melhor para vocês. Se preferir, também explico por aqui mesmo.",
+    "Se fizer sentido, posso mostrar numa conversa rápida de 10 minutos, online ou presencial, sem compromisso. E se não for o momento, sem problema."
+  ],
+
+  "estruturas_resumo": [
+    "Obrigado pelo retorno! Segue o resumo de como funcionaria aí:\n\n• Triagem no WhatsApp: o paciente conta a queixa e a recepção recebe uma ficha resumida antes do atendimento;\n• NF-e: a nota sai em poucos minutos, e vocês só conferem e validam com 1 clique.\n\nSe quiser ver funcionando, mostro em 10 minutos (online ou presencial), quando for melhor para vocês. Se preferir, sigo tirando dúvidas por aqui mesmo.",
+    "Obrigado por responder! 😊 Resumindo em 1 minuto:\n\n• Triagem no WhatsApp: as queixas dos pacientes chegam organizadas para a recepção, já resumidas;\n• NF-e: a emissão, que costuma ser manual e demorada, sai em poucos minutos, com validação em 1 clique.\n\nSe fizer sentido, posso mostrar numa conversa rápida de 10 minutos, sem compromisso. E se não for o momento, sem problema."
   ],
 
   "autoridades": [
@@ -55,6 +63,6 @@
 
   "followups": [
     "{saudacao} Passando para saber se deu para ver minha mensagem sobre {a_clinica}. Se não for relevante, sem problema — é só me avisar.",
-    "{saudacao} Só passando de novo: se {fizer sentido|for o caso}, te mando um resumo rápido das automações {da_clinica}. Se não, sem problema algum."
+    "{saudacao} Só passando de novo: se {fizer sentido|for o caso}, te mando um resumo rápido das automações para {a_clinica}. Se não, sem problema algum."
   ]
 }
