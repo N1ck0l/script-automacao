@@ -222,7 +222,9 @@ class TestMensagem(unittest.TestCase):
                                ("Dra. Mairaira Leão", "da Dra. Mairaira Leão")]:
             contato = {"clinica": nome, "bairro": "Centro", "cidade": "Aracaju"}
             for _ in range(10):
-                self.assertIn(f"trabalho {esperado}", pw.montar_texto(contato))
+                self.assertIn(nome, pw.montar_texto(contato))
+            self.assertEqual(pw._contexto(contato, pw.carregar_mensagens(), None)["da_clinica"],
+                             esperado)
 
     def test_nome_nunca_fica_vazio(self):
         self.assertEqual(pw.nome_para_mensagem("Aracaju", "", "Aracaju"), "Aracaju")
@@ -848,6 +850,19 @@ class TestTextosAB(unittest.TestCase):
                                              "versao_textos": ""}))
         self.assertIsNone(pw._segunda_etapa({"variante": "completa", "etapa": "resumo",
                                              "versao_textos": "2026-11-11"}))
+
+    def test_resposta_negativa_nao_recebe_venda(self):
+        for t in ["Não", "não, obrigado", "Já temos sistema", "No momento não",
+                  "Obrigada, mas estamos bem"]:
+            self.assertTrue(pw.resposta_negativa([t]), t)
+        for t in ["Sim, bastante!", "Pode mandar", "Quem fala?", "É sim, o dia todo",
+                  "Vou repassar para a gestora"]:
+            self.assertFalse(pw.resposta_negativa([t]), t)
+
+    def test_nao_relevante_e_optout(self):
+        for t in ["Não é relevante, obrigado", "Não precisamos", "não temos necessidade"]:
+            self.assertTrue(any(__import__("re").search(p, t.lower())
+                                for p in pw.PADROES_OPTOUT), t)
 
     def test_followup_nao_atribui_automacoes_a_clinica(self):
         for _ in range(40):

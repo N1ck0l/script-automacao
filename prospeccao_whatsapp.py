@@ -63,6 +63,7 @@ COLUNAS = ["clinica", "bairro", "cidade", "telefone", "site", "avaliacoes",
 # variante: teste A/B ("curta" | "completa")
 # etapa: "abertura" (curta enviada) | "apresentacao" (texto completo enviado)
 #        | "resumo" (resumo enviado depois que a pessoa respondeu à completa)
+#        | "recusou" (respondeu com uma negativa: nada automático, o operador decide)
 # versao_textos: "versao" do mensagens.json usada no 1º envio (o A/B compara
 #        só contatos da versão atual; vazio = textos antigos)
 # menu: "respondido" quando o script já escolheu "falar com atendente" no robô
@@ -823,6 +824,12 @@ class SessaoWeb:
             from selenium import webdriver
             opcoes = webdriver.ChromeOptions()
             opcoes.add_argument("--start-maximized")
+            # A janela pode ficar minimizada/atrás de outras: sem isto o Chrome
+            # desacelera a aba e a conferência de entrega fica lenta/inconclusiva.
+            for flag in ("--disable-background-timer-throttling",
+                         "--disable-backgrounding-occluded-windows",
+                         "--disable-renderer-backgrounding"):
+                opcoes.add_argument(flag)
             opcoes.add_argument(f"--user-data-dir={PERFIL_SELENIUM}")  # mantém o login
             self.driver = webdriver.Chrome(options=opcoes)
             self.aberto_em = time.time()
@@ -1423,7 +1430,25 @@ PADROES_OPTOUT = (
     r"\bn[ãa]o\s+(?:tenho|temos|h[áa])\s+interesse", r"\bsem\s+interesse\b",
     r"\bpare\b", r"\bremov", r"\bdescadastr", r"\bn[ãa]o\s+(?:me\s+)?(?:envie|mande)",
     r"\bn[ãa]o\s+entre\s+em\s+contato",
+    # as mensagens dizem "se não for relevante, é só me avisar":
+    r"\bn[ãa]o\s+(?:[ée]|seria|[ée]\s+do\s+nosso)\s+(?:relevante|interesse|necess[áa]rio)",
+    r"\bn[ãa]o\s+(?:precisamos|estamos\s+precisando|temos\s+necessidade)",
 )
+
+# Respostas negativas que NÃO são pedido de opt-out ("Não", "Não, obrigado",
+# "Já temos", "No momento não"): a pessoa é avisada ao operador, mas o script
+# não manda apresentação/resumo sozinho — seria empurrar venda para quem
+# acabou de dizer não.
+PADROES_NEGATIVA = (
+    r"^\W*n[ãa]o\b", r"\bj[áa]\s+(?:temos|usamos|tem|utilizamos)\b",
+    r"\b(?:agora|no\s+momento|por\s+enquanto)\s+n[ãa]o\b", r"\bobrigad[oa],?\s+mas\b",
+    r"\bagrade[çc]o,?\s+mas\b",
+)
+
+
+def resposta_negativa(textos: list[str]) -> bool:
+    """True se alguma resposta da pessoa soa como recusa (sem ser opt-out)."""
+    return any(re.search(p, t.strip().lower()) for t in textos for p in PADROES_NEGATIVA)
 
 
 def interpretar_bolha(pre: str, texto: str) -> dict:
@@ -1634,7 +1659,11 @@ def verificar_conversas(planilha: Planilha, sessao: "SessaoWeb",
             primeiro = _data(historico[tel][0].get("timestamp", "")) or desde
             recebidas = mensagens_recebidas(bolhas, enviadas, primeiro)
             if resposta == "respondeu" and _segunda_etapa(contato):
-                relatorio["acoes"].append((_segunda_etapa(contato), tel, None))
+                ultimas = [b["texto"] for b in mensagens_recebidas(bolhas, enviadas, desde)]
+                if resposta_negativa(ultimas):
+                    contato["etapa"] = "recusou"  # não insiste; o operador decide
+                else:
+                    relatorio["acoes"].append((_segunda_etapa(contato), tel, None))
             if resposta != "respondeu" and resposta != "sem interesse" \
                     and not contato.get("menu"):
                 digito = opcao_atendente([b["texto"] for b in recebidas])

@@ -187,11 +187,12 @@ Começa às **10h30** + um atraso sorteado de 0 a `--atraso-max` minutos (fora d
 pico da recepção, que é logo cedo).
 
 **Teste A/B** (coluna `variante`, fixa por número, metade para cada lado):
-- `curta`: uma pergunta curta pedindo permissão ("posso te contar o que
-  faço?"). Quando uma **pessoa** responde, o script envia sozinho a
+- `curta`: uma pergunta fácil para a recepção responder ("o WhatsApp de
+  vocês costuma ficar muito cheio?") ou um pedido curto de permissão. Quando uma **pessoa** responde, o script envia sozinho a
   **apresentação** (`estruturas_apresentacao`) e a coluna `etapa` vira
   `apresentacao`;
-- `completa`: a mensagem completa, terminando com a oferta de um resumo.
+- `completa`: a mensagem completa, terminando com a oferta de um resumo e o
+  pedido de repassar para quem cuida da gestão (quem lê costuma ser a recepção).
   Quando uma **pessoa** responde, o script envia sozinho o **resumo**
   (`estruturas_resumo`) e a `etapa` vira `resumo`. Só vale para contatos
   abordados com textos versionados (`versao_textos` preenchida); quem recebeu
@@ -224,7 +225,11 @@ Agendado como **"Prospeccao Acompanhamento"** às 12h, 14h, 16h e 18h (dias
   `--limite-dia` por dia;
 - em robôs com menu, escolhe a opção **"falar com atendente"** (uma vez por
   clínica; não conta no limite diário);
-- marca `nao_contatar` quem pedir para não ser contatado.
+- marca `nao_contatar` quem pedir para não ser contatado (inclui "não é
+  relevante", "não precisamos");
+- resposta negativa sem ser opt-out ("Não", "Já temos", "No momento não"):
+  você é avisado, mas o script **não** manda apresentação/resumo (`etapa` =
+  `recusou`).
 
 ### Agendamento
 
