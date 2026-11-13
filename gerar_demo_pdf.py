@@ -245,8 +245,8 @@ def main() -> None:
     c.line(M + 61 * mm, y + 1.2 * mm, W - M, y + 1.2 * mm)
     y -= 5 * mm
     passos = [
-        par("<b>1. Demonstração</b><br/>conversa de 10 minutos, online ou "
-            "presencial, no horário conveniente", 8),
+        par("<b>1. Demonstração</b><br/>conversa objetiva, online ou "
+            "presencial (12h–13h, após 17h seg–qui ou 16h sex)", 8),
         par("<b>2. Implantação</b><br/>configuração da triagem e da NF-e "
             "conforme a rotina da clínica", 8),
         par("<b>3. Uso diário</b><br/>conversas organizadas na recepção e "
@@ -280,10 +280,10 @@ def main() -> None:
     c.setFont("Helvetica", 8.6)
     c.drawCentredString(
         W / 2, y - 15 * mm,
-        "Posso apresentar o funcionamento em uma reunião de 10 minutos,")
+        "Posso apresentar o funcionamento em uma conversa breve e objetiva,")
     c.drawCentredString(
         W / 2, y - 19.2 * mm,
-        "sem compromisso, com você ou com o responsável pela gestão.")
+        "sem compromisso (horários: 12h–13h, após 17h seg–qui ou após 16h sex).")
     c.setFillColor(colors.HexColor("#25d366"))
     c.setFont("Helvetica-Bold", 11)
     c.drawCentredString(W / 2, y - 25.5 * mm,
