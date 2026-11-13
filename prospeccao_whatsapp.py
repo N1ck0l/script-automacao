@@ -535,7 +535,8 @@ def _com_link_demonstracao(texto: str, mensagens: dict,
                            contato: dict | None = None) -> str:
     """Acrescenta o link da demonstração quando hospedado (html preenchido)."""
     url = demonstracao_html(mensagens, contato)
-    return f"{texto}\n\nDemonstração interativa: {url}" if url else texto
+    return (f"{texto}\n\nDemonstração interativa: {url} "
+            "(abre direto no navegador, sem baixar nada)" if url else texto)
 
 
 def montar_link(contato: dict, mensagem: str) -> str:
@@ -1091,14 +1092,24 @@ class SessaoWeb:
                 return False
             botoes[0].click()
             time.sleep(1.0)
+            eh_imagem = caminho.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
             alvo = None
-            for item in driver.find_elements(
-                    By.CSS_SELECTOR, '[role="menuitem"], [role="button"]'):
-                rotulo = (item.get_attribute("innerText") or "").strip().lower()
-                if "document" in rotulo or item.find_elements(
-                        By.CSS_SELECTOR, 'span[data-icon="document"]'):
-                    alvo = item
-                    break
+            itens = driver.find_elements(
+                By.CSS_SELECTOR, '[role="menuitem"], [role="button"]')
+            if eh_imagem:
+                for item in itens:
+                    rotulo = (item.get_attribute("innerText") or "").strip().lower()
+                    if ("foto" in rotulo or "photo" in rotulo or "image" in rotulo
+                            or item.find_elements(By.CSS_SELECTOR, 'span[data-icon="image"]')):
+                        alvo = item
+                        break
+            if alvo is None:
+                for item in itens:
+                    rotulo = (item.get_attribute("innerText") or "").strip().lower()
+                    if "document" in rotulo or item.find_elements(
+                            By.CSS_SELECTOR, 'span[data-icon="document"]'):
+                        alvo = item
+                        break
             if alvo is None:
                 print("[AVISO] Opção 'Documento' não encontrada — anexe o PDF "
                       "manualmente no WhatsApp Web.")

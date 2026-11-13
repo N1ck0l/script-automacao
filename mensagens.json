@@ -66,8 +66,9 @@
   ],
 
   "demonstracao": {
-    "_ajuda": "Demonstração da 2ª etapa (apresentação/resumo). 'pdf': arquivo anexado ao lado do script ('' = não anexa). 'html': URL da página interativa hospedada, ex. GitHub Pages ('' = não envia o link; preenchido, a URL entra na mensagem).",
+    "_ajuda": "Demonstração da 2ª etapa (apresentação/resumo). 'pdf': arquivo anexado ao lado do script ('' = não anexa; troque para 'demonstracao.png' para enviar como imagem inline sem exigir download). 'html': URL da página interativa hospedada ('' = não envia o link).",
     "pdf": "demonstracao.pdf",
+    "imagem": "demonstracao.png",
     "html": "https://n1ck0l.github.io/script-automacao/"
   },
 

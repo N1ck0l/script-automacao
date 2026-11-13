@@ -305,6 +305,16 @@ def main() -> None:
     c.save()
     print(f"PDF gerado: {SAIDA}")
 
+    import shutil
+    import subprocess
+    if shutil.which("pdftoppm"):
+        png_base = SAIDA.with_suffix("")
+        subprocess.run(
+            ["pdftoppm", "-png", "-r", "180", "-singlefile", str(SAIDA), str(png_base)],
+            check=True,
+        )
+        print(f"Imagem gerada: {png_base}.png")
+
 
 if __name__ == "__main__":
     main()
