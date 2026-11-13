@@ -19,17 +19,21 @@
 <style>
   :root {
     --azul: #123a6b;
-    --azul-escuro: #0c2749;
+    --azul-escuro: #07162c;
+    --azul-meia-noite: #0c2749;
     --azul-vivo: #17508e;
     --azul-claro: #eaf1fa;
+    --dourado: #d4af63;
+    --dourado-claro: #f7f0df;
     --verde-wa: #25d366;
     --verde-wa-escuro: #128c7e;
     --verde-bolha: #dcf8c6;
     --cinza: #5b6470;
-    --cinza-claro: #f2f4f7;
-    --borda: #d9dee6;
-    --texto: #1d2733;
-    --sombra: 0 10px 30px rgba(12, 39, 73, .09);
+    --cinza-claro: #f4f6fa;
+    --borda: #dce2ec;
+    --texto: #16202c;
+    --sombra: 0 12px 34px rgba(7, 22, 44, .09);
+    --sombra-hover: 0 22px 46px rgba(7, 22, 44, .16);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html { scroll-behavior: smooth; }
@@ -39,17 +43,61 @@
     background: #fff;
     line-height: 1.55;
     -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
   }
   .container { max-width: 1060px; margin: 0 auto; padding: 0 20px; }
   img { max-width: 100%; }
   a { color: inherit; }
 
+  /* ---------- barra de progresso de leitura ---------- */
+  .scroll-progresso {
+    position: fixed; top: 0; left: 0; height: 3px; width: 0%; z-index: 80;
+    background: linear-gradient(90deg, var(--dourado), var(--verde-wa));
+    transition: width .08s linear;
+  }
+
   /* ---------- animação de entrada ---------- */
-  body.js .reveal { opacity: 0; transform: translateY(22px); transition: opacity .7s ease, transform .7s ease; }
+  body.js .reveal {
+    opacity: 0; transform: translateY(28px) scale(.98);
+    transition: opacity .75s cubic-bezier(.22, 1, .36, 1), transform .75s cubic-bezier(.22, 1, .36, 1);
+  }
   body.js .reveal.visivel { opacity: 1; transform: none; }
+
+  @keyframes heroFadeUp {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes auroraFloat {
+    0%, 100% { transform: translateX(-50%) translateY(0) scale(1); }
+    50% { transform: translateX(-46%) translateY(22px) scale(1.08); }
+  }
+  @keyframes gridDrift {
+    from { background-position: 0 0; }
+    to { background-position: 26px 26px; }
+  }
+  @keyframes pulseRing {
+    0% { box-shadow: 0 0 0 0 rgba(37, 211, 102, .65); }
+    70% { box-shadow: 0 0 0 9px rgba(37, 211, 102, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(37, 211, 102, 0); }
+  }
+  @keyframes shimmerSweep {
+    0% { transform: translateX(-140%) skewX(-20deg); }
+    100% { transform: translateX(240%) skewX(-20deg); }
+  }
+  @keyframes msgPop {
+    0% { opacity: 0; transform: translateY(12px) scale(.94); }
+    70% { opacity: 1; transform: translateY(-2px) scale(1.01); }
+    100% { opacity: 1; transform: none; }
+  }
+  @keyframes floatSlow {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
-    body.js .reveal { opacity: 1; transform: none; transition: none; }
+    *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+    body.js .reveal { opacity: 1; transform: none; }
   }
 
   /* ---------- navegação fixa ---------- */
@@ -86,55 +134,80 @@
   /* ---------- hero ---------- */
   .hero {
     position: relative; overflow: hidden; text-align: center; color: #fff;
-    background: linear-gradient(135deg, var(--azul-escuro) 0%, var(--azul) 70%, var(--azul-vivo) 100%);
-    padding: 104px 20px 88px;
+    background: linear-gradient(135deg, var(--azul-escuro) 0%, var(--azul-meia-noite) 55%, var(--azul-vivo) 100%);
+    padding: 112px 20px 94px;
+    border-bottom: 3px solid var(--dourado);
   }
   .hero::before {
     content: ""; position: absolute; inset: 0; pointer-events: none;
     background-image: radial-gradient(rgba(255, 255, 255, .07) 1px, transparent 1px);
     background-size: 26px 26px;
+    animation: gridDrift 18s linear infinite;
   }
   .hero::after {
     content: ""; position: absolute; pointer-events: none;
-    width: 640px; height: 640px; left: 50%; top: -46%;
+    width: 720px; height: 720px; left: 50%; top: -48%;
     transform: translateX(-50%);
-    background: radial-gradient(circle, rgba(37, 211, 102, .16), transparent 65%);
+    background: radial-gradient(circle, rgba(212, 175, 99, .18), rgba(37, 211, 102, .12) 45%, transparent 70%);
+    animation: auroraFloat 9s ease-in-out infinite;
   }
-  .hero-inner { position: relative; z-index: 1; max-width: 760px; margin: 0 auto; }
+  .hero-inner { position: relative; z-index: 1; max-width: 780px; margin: 0 auto; }
+  .hero-inner > * { animation: heroFadeUp .8s cubic-bezier(.22, 1, .36, 1) both; }
+  .hero-inner .selo { animation-delay: .05s; }
+  .hero-inner h1 { animation-delay: .15s; }
+  .hero-inner .hero-sub { animation-delay: .25s; }
+  .hero-inner .hero-botoes { animation-delay: .35s; }
+  .hero-inner .hero-trust { animation-delay: .45s; }
   .selo {
-    display: inline-block; font-size: 12.5px; letter-spacing: 2.4px;
-    text-transform: uppercase; font-weight: 600;
-    border: 1px solid rgba(255, 255, 255, .45); border-radius: 999px;
-    padding: 6px 18px; margin-bottom: 22px; opacity: .92;
+    display: inline-flex; align-items: center; gap: 9px;
+    font-size: 12px; letter-spacing: 2.4px;
+    text-transform: uppercase; font-weight: 700; color: var(--dourado-claro);
+    border: 1px solid rgba(212, 175, 99, .55); border-radius: 999px;
+    background: rgba(255, 255, 255, .04); backdrop-filter: blur(8px);
+    padding: 7px 18px; margin-bottom: 24px;
   }
-  .hero h1 { font-size: clamp(30px, 5vw, 44px); font-weight: 800; letter-spacing: -.8px; line-height: 1.15; }
+  .selo::before {
+    content: ""; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--verde-wa); animation: pulseRing 2.2s infinite;
+  }
+  .hero h1 { font-size: clamp(30px, 5vw, 46px); font-weight: 800; letter-spacing: -.9px; line-height: 1.13; }
   .hero-sub { margin-top: 16px; font-size: clamp(16px, 2.2vw, 18.5px); opacity: .9; }
   .hero-botoes { margin-top: 34px; display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
   .btn {
+    position: relative; overflow: hidden;
     display: inline-block; border-radius: 999px; font-weight: 700;
     text-decoration: none; padding: 15px 32px; font-size: 16px;
-    transition: transform .2s, background .2s, box-shadow .2s;
+    transition: transform .25s cubic-bezier(.22, 1, .36, 1), background .2s, box-shadow .25s;
   }
   .btn-verde { background: var(--verde-wa); color: #06301f; box-shadow: 0 10px 26px rgba(37, 211, 102, .35); }
-  .btn-verde:hover { background: #1ebd5a; transform: translateY(-2px); }
+  .btn-verde::after, .btn-whatsapp::after {
+    content: ""; position: absolute; top: 0; left: 0; width: 45%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .38), transparent);
+    animation: shimmerSweep 3.8s ease-in-out infinite;
+  }
+  .btn-verde:hover { background: #1ebd5a; transform: translateY(-3px) scale(1.02); box-shadow: 0 16px 34px rgba(37, 211, 102, .45); }
   .btn-contorno { border: 1.5px solid rgba(255, 255, 255, .55); color: #fff; }
-  .btn-contorno:hover { background: rgba(255, 255, 255, .1); transform: translateY(-2px); }
-  .hero-trust { margin-top: 30px; font-size: 13.5px; opacity: .7; letter-spacing: .2px; }
+  .btn-contorno:hover { background: rgba(255, 255, 255, .12); transform: translateY(-3px); }
+  .hero-trust { margin-top: 30px; font-size: 13.5px; opacity: .75; letter-spacing: .2px; }
 
   /* ---------- benefícios ---------- */
-  .beneficios { padding: 52px 0; background: #fff; border-bottom: 1px solid #eef1f5; }
+  .beneficios { padding: 56px 0; background: #fff; border-bottom: 1px solid #eef1f5; }
   .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
   @media (max-width: 900px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } }
   @media (max-width: 520px) { .grid-4 { grid-template-columns: 1fr; } }
   .benef-card {
     background: #fff; border: 1px solid var(--borda); border-radius: 16px;
     padding: 24px 20px; box-shadow: var(--sombra);
+    transition: transform .35s cubic-bezier(.22, 1, .36, 1), box-shadow .35s, border-color .3s;
   }
+  .benef-card:hover { transform: translateY(-6px); box-shadow: var(--sombra-hover); border-color: rgba(18, 58, 107, .3); }
   .benef-icone {
     width: 46px; height: 46px; border-radius: 13px;
     background: var(--azul-claro); color: var(--azul);
     display: flex; align-items: center; justify-content: center; margin-bottom: 15px;
+    transition: transform .35s cubic-bezier(.22, 1, .36, 1), background .3s, color .3s;
   }
+  .benef-card:hover .benef-icone { transform: scale(1.1) rotate(-4deg); background: var(--azul); color: #fff; }
   .benef-card h3 { font-size: 15.5px; color: var(--azul-escuro); margin-bottom: 7px; font-weight: 700; letter-spacing: -.2px; }
   .benef-card p { font-size: 13.5px; color: var(--cinza); }
 
@@ -173,10 +246,13 @@
 
   /* ---------- celular ---------- */
   .celular {
-    width: 330px; background: #000; border-radius: 36px; padding: 12px;
-    box-shadow: 0 22px 50px rgba(12, 39, 73, .3);
+    width: 330px; background: linear-gradient(145deg, #1b2434, #050911); border-radius: 38px; padding: 12px;
+    border: 1px solid rgba(212, 175, 99, .28);
+    box-shadow: 0 26px 56px rgba(7, 22, 44, .34), 0 0 0 1px rgba(255, 255, 255, .06) inset;
     position: sticky; top: 72px;
+    transition: transform .4s cubic-bezier(.22, 1, .36, 1), box-shadow .4s ease;
   }
+  .celular:hover { transform: translateY(-4px); box-shadow: 0 32px 64px rgba(7, 22, 44, .4); }
   @media (max-width: 820px) { .celular { position: static; } }
   .tela {
     background: #ece5dd; border-radius: 26px; overflow: hidden;
@@ -192,7 +268,11 @@
     justify-content: center; font-weight: 700; font-size: 15px;
   }
   .wa-topo .nome { font-size: 14px; font-weight: 600; }
-  .wa-topo .status { font-size: 11px; opacity: .85; }
+  .wa-topo .status { font-size: 11px; opacity: .9; display: inline-flex; align-items: center; gap: 5px; }
+  .wa-topo .status::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%; background: #4ade80;
+    animation: pulseRing 2.2s infinite;
+  }
   .wa-fundo {
     flex: 1; padding: 14px 12px; overflow-y: auto;
     display: flex; flex-direction: column; gap: 8px;
@@ -225,6 +305,7 @@
     flex-shrink: 0; border-top: 1px solid #e2e2e2;
   }
   .js .msg.escondida { display: none; }
+  .msg:not(.escondida) { animation: msgPop .38s cubic-bezier(.22, 1, .36, 1) both; }
   .js .painel-resumo.escondido { opacity: 0; transform: translateY(14px); pointer-events: none; }
   .painel-resumo { transition: opacity .6s ease, transform .6s ease; }
 
@@ -244,7 +325,9 @@
     border-left: 5px solid var(--verde-wa-escuro);
     border-radius: 14px; padding: 22px 24px;
     box-shadow: var(--sombra);
+    transition: transform .3s ease, box-shadow .3s ease;
   }
+  .card-resumo:hover { transform: translateY(-2px); box-shadow: var(--sombra-hover); }
   .card-resumo .etiqueta {
     display: inline-flex; align-items: center; gap: 7px;
     font-size: 11.5px; font-weight: 700; letter-spacing: 1.5px;
@@ -266,7 +349,11 @@
     .card-resumo dl { grid-template-columns: 1fr; row-gap: 2px; }
     .card-resumo dd { margin-bottom: 8px; }
   }
-  .comp-card { background: #fff; border: 1px solid var(--borda); border-radius: 14px; padding: 18px 20px; }
+  .comp-card {
+    background: #fff; border: 1px solid var(--borda); border-radius: 14px; padding: 18px 20px;
+    transition: transform .3s ease, box-shadow .3s ease;
+  }
+  .comp-card:hover { transform: translateY(-2px); box-shadow: var(--sombra-hover); }
   .comp-card h4 { font-size: 12.5px; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 10px; font-weight: 700; }
   .comp-card.antes h4 { color: #b4453c; }
   .comp-card.depois h4 { color: var(--verde-wa-escuro); }
@@ -275,6 +362,87 @@
   .comp-card li::before { position: absolute; left: 0; top: 5px; font-weight: 700; }
   .comp-card.antes li::before { content: "\00d7"; color: #b4453c; font-size: 16px; }
   .comp-card.depois li::before { content: "\2713"; color: var(--verde-wa-escuro); }
+
+  /* ---------- cenários interativos & personalização ---------- */
+  .sub-personalizada {
+    display: none; margin: -18px auto 22px; text-align: center;
+    font-size: 13.5px; font-weight: 600; color: var(--azul);
+    background: var(--azul-claro); border: 1px solid rgba(18, 58, 107, .16);
+    padding: 6px 14px; border-radius: 999px; width: fit-content;
+  }
+  .cenarios {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 10px;
+    margin: 0 auto 28px;
+  }
+  .btn-cenario {
+    appearance: none; background: #fff; color: var(--cinza);
+    border: 1px solid var(--borda); border-radius: 999px;
+    padding: 8px 16px; font-size: 13.5px; font-weight: 600;
+    cursor: pointer; transition: all .2s ease; font-family: inherit;
+  }
+  .btn-cenario:hover { border-color: var(--azul); color: var(--azul); }
+  .btn-cenario.ativo {
+    background: var(--azul); color: #fff; border-color: var(--azul);
+    box-shadow: 0 4px 12px rgba(18, 58, 107, .18);
+  }
+
+  /* ---------- barra de progresso + tilt 3D ---------- */
+  var barraProgresso = document.getElementById("scrollProgresso");
+  function atualizarProgresso() {
+    if (!barraProgresso) return;
+    var doc = document.documentElement;
+    var maxScroll = doc.scrollHeight - window.innerHeight;
+    var pct = maxScroll > 0 ? (window.scrollY / maxScroll) * 100 : 0;
+    barraProgresso.style.width = Math.min(100, Math.max(0, pct)) + "%";
+  }
+  window.addEventListener("scroll", atualizarProgresso, { passive: true });
+  atualizarProgresso();
+
+  if (window.matchMedia("(pointer: fine)").matches) {
+    document.querySelectorAll(".benef-card, .etapa-card").forEach(function (card) {
+      card.addEventListener("mousemove", function (e) {
+        var r = card.getBoundingClientRect();
+        var x = (e.clientX - r.left) / r.width - 0.5;
+        var y = (e.clientY - r.top) / r.height - 0.5;
+        card.style.transform = "perspective(700px) rotateX(" + (-y * 5) + "deg) rotateY(" + (x * 6) + "deg) translateY(-6px)";
+      });
+      card.addEventListener("mouseleave", function () {
+        card.style.transform = "";
+      });
+    });
+  }
+
+  /* ---------- calculadora de ROI ---------- */
+  .roi-grid {
+    display: grid; grid-template-columns: 1.15fr .85fr; gap: 26px; align-items: stretch;
+  }
+  @media (max-width: 820px) { .roi-grid { grid-template-columns: 1fr; } }
+  .roi-box {
+    background: #fff; border: 1px solid var(--borda); border-radius: 16px;
+    padding: 26px; box-shadow: var(--sombra);
+  }
+  .roi-campo { margin-bottom: 20px; }
+  .roi-campo:last-child { margin-bottom: 0; }
+  .roi-label {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 14.5px; font-weight: 600; color: var(--texto); margin-bottom: 8px;
+  }
+  .roi-label span { color: var(--azul); font-weight: 800; font-size: 16px; }
+  .roi-campo input[type="range"] {
+    width: 100%; accent-color: var(--azul); cursor: pointer;
+  }
+  .roi-resultado {
+    background: linear-gradient(135deg, var(--azul-escuro), var(--azul));
+    color: #fff; border-radius: 16px; padding: 28px 26px;
+    display: flex; flex-direction: column; justify-content: center; gap: 18px;
+  }
+  .roi-metrica small {
+    display: block; font-size: 12px; letter-spacing: 1.2px;
+    text-transform: uppercase; color: rgba(255, 255, 255, .72); margin-bottom: 4px;
+  }
+  .roi-metrica strong { font-size: 32px; font-weight: 800; letter-spacing: -.5px; color: #fff; }
+  .roi-metrica.destaque strong { color: #6ef7a7; }
+  .roi-nota { font-size: 12.5px; color: rgba(255, 255, 255, .68); line-height: 1.45; }
 
   /* ---------- NF-e ---------- */
   .nfe-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; position: relative; }
@@ -319,7 +487,14 @@
   .etapa-card {
     background: #fff; border: 1px solid var(--borda); border-radius: 16px;
     padding: 26px 22px; text-align: center; position: relative; box-shadow: var(--sombra);
+    transition: transform .35s cubic-bezier(.22, 1, .36, 1), box-shadow .35s, border-color .3s;
   }
+  .etapa-card:hover { transform: translateY(-6px); box-shadow: var(--sombra-hover); border-color: var(--dourado); }
+  .nfe-col {
+    background: #fff; border: 1px solid var(--borda); border-radius: 16px; padding: 28px 26px 24px;
+    transition: transform .35s cubic-bezier(.22, 1, .36, 1), box-shadow .35s;
+  }
+  .nfe-col:hover { transform: translateY(-4px); box-shadow: var(--sombra-hover); }
   @media (min-width: 761px) {
     .etapa-card::after {
       content: ""; position: absolute; top: 54px; right: -28px;
@@ -400,6 +575,7 @@
 </style>
 </head>
 <body>
+<div class="scroll-progresso" id="scrollProgresso" aria-hidden="true"></div>
 <script>document.body.classList.add("js");</script>
 
 <!-- ================================================================ -->
@@ -472,6 +648,14 @@
     <div class="secao-titulo reveal">Etapa 1</div>
     <h2 class="reveal">Triagem pelo WhatsApp</h2>
     <p class="secao-sub reveal">O paciente conversa normalmente. Ao final, a recepção recebe a queixa já resumida e organizada — sem precisar repetir as mesmas perguntas.</p>
+    <div class="sub-personalizada" id="subPersonalizada"></div>
+
+    <div class="cenarios reveal" role="tablist" aria-label="Cenários de atendimento">
+      <button class="btn-cenario ativo" type="button" data-cenario="odonto">Odontologia</button>
+      <button class="btn-cenario" type="button" data-cenario="medico">Clínica Médica</button>
+      <button class="btn-cenario" type="button" data-cenario="lembrete">Lembrete 24h + NF-e</button>
+      <button class="btn-cenario" type="button" data-cenario="pos_consulta">Pós-consulta + Google</button>
+    </div>
 
     <div class="chips reveal" aria-hidden="true">
       <div class="chip ativo" id="chip1"><span class="n">1</span> Paciente escreve</div>
@@ -577,14 +761,53 @@
         <div class="passo"><div class="num">1</div><div class="txt">Dados já capturados<small>As informações do atendimento vêm prontas da triagem</small></div></div>
         <div class="passo"><div class="num">2</div><div class="txt">Nota gerada em poucos minutos<small>A automação monta a nota a partir dos dados registrados</small></div></div>
         <div class="passo"><div class="num">3</div><div class="txt">Validação em 1 clique<small>A equipe apenas confere e valida</small></div></div>
-        <div class="nfe-destaque">Poucos minutos · validação em um clique</div>
+        <div class="passo"><div class="num">4</div><div class="txt">Envio automático ao paciente<small>A NF-e chega no WhatsApp do paciente logo após a validação — zero fila na saída</small></div></div>
+        <div class="nfe-destaque">Poucos minutos · menos faltas · NF-e no WhatsApp</div>
       </div>
     </div>
   </div>
 </section>
 
 <!-- ================================================================ -->
-<section id="implantacao" class="fundo-cinza">
+<section id="roi" class="fundo-cinza">
+  <div class="container">
+    <div class="secao-titulo reveal">Impacto na rotina</div>
+    <h2 class="reveal">Estime o ganho na sua clínica</h2>
+    <p class="secao-sub reveal">Ajuste os números aproximados do seu consultório para ver o tempo economizado na recepção e a receita preservada ao evitar faltas.</p>
+
+    <div class="roi-grid">
+      <div class="roi-box reveal">
+        <div class="roi-campo">
+          <label class="roi-label" for="roiMsgs">Mensagens recebidas por dia no WhatsApp <span id="roiMsgsVal">40</span></label>
+          <input id="roiMsgs" type="range" min="10" max="200" step="5" value="40">
+        </div>
+        <div class="roi-campo">
+          <label class="roi-label" for="roiFaltas">Faltas ou desistências por semana <span id="roiFaltasVal">5</span></label>
+          <input id="roiFaltas" type="range" min="1" max="25" step="1" value="5">
+        </div>
+        <div class="roi-campo">
+          <label class="roi-label" for="roiTicket">Valor médio da consulta/procedimento <span id="roiTicketVal">R$ 250</span></label>
+          <input id="roiTicket" type="range" min="100" max="800" step="25" value="250">
+        </div>
+      </div>
+
+      <div class="roi-resultado reveal" style="transition-delay:.1s">
+        <div class="roi-metrica">
+          <small>Tempo economizado na recepção</small>
+          <strong id="roiHoras">~29 h/mês</strong>
+        </div>
+        <div class="roi-metrica destaque">
+          <small>Receita protegida evitando faltas</small>
+          <strong id="roiReceita">R$ 2.500/mês</strong>
+        </div>
+        <div class="roi-nota">Estimativa conservadora considerando ~2 min poupados por conversa triada (22 dias úteis) e redução de 50% das faltas com confirmação 24h antes.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section id="implantacao">
   <div class="container">
     <div class="secao-titulo reveal">Próximos passos</div>
     <h2 class="reveal">Como funciona a implantação</h2>
@@ -693,11 +916,117 @@
   window.addEventListener("scroll", atualizarNav, { passive: true });
   atualizarNav();
 
+  /* ---------- personalização por URL (?clinica=...&seg=odonto|medico) & cenários ---------- */
+  var params = new URLSearchParams(window.location.search);
+  var clinicaParam = (params.get("clinica") || "").trim().slice(0, 60);
+  var segParam = (params.get("seg") || "").trim().toLowerCase();
+
+  if (clinicaParam) {
+    var topoNome = document.querySelector(".wa-topo .nome");
+    var topoAvatar = document.querySelector(".wa-topo .wa-avatar");
+    var subPers = document.getElementById("subPersonalizada");
+    var btnWa = document.querySelector(".btn-whatsapp");
+    if (topoNome) topoNome.textContent = clinicaParam + " — Atendimento";
+    if (topoAvatar) topoAvatar.textContent = clinicaParam.charAt(0).toUpperCase();
+    if (subPers) {
+      subPers.textContent = "Simulação preparada para " + clinicaParam;
+      subPers.style.display = "block";
+    }
+    if (btnWa) {
+      var msgWa = "Olá Nickolas, sou da " + clinicaParam + " e gostaria de agendar uma demonstração das automações.";
+      btnWa.href = "https://wa.me/5579981677954?text=" + encodeURIComponent(msgWa);
+    }
+  }
+
+  var CENARIOS = {
+    odonto: {
+      etiqueta: "Triagem organizada",
+      acao: "recepção confirma o encaixe e o paciente chega já com os dados registrados.",
+      campos: [
+        ["Paciente", "Mariana Costa"],
+        ["Motivo", "Dor aguda — molar inferior direito"],
+        ["Histórico", "Há 3 dias; analgésico sem alívio"],
+        ["Convênio", "Particular"],
+        ["Preferência", "Tarde — quinta-feira"]
+      ],
+      mensagens: [
+        { tipo: "recebida", hora: "09:12", texto: "Bom dia! Gostaria de agendar uma consulta. Estou com uma dor muito forte no dente de baixo, do lado direito." },
+        { tipo: "enviada", hora: "09:12", texto: "Bom dia! Para organizar seu atendimento, posso fazer algumas perguntas rápidas? Qual seu nome completo?" },
+        { tipo: "recebida", hora: "09:13", texto: "Mariana Costa" },
+        { tipo: "enviada", hora: "09:13", texto: "Obrigada, Mariana. Há quanto tempo começou a dor?" },
+        { tipo: "recebida", hora: "09:13", texto: "Faz 3 dias. Já tomei dipirona e não melhorou." },
+        { tipo: "enviada", hora: "09:14", texto: "Entendi. Você usa convênio ou será particular?" },
+        { tipo: "recebida", hora: "09:14", texto: "Particular" },
+        { tipo: "enviada", hora: "09:14", texto: "Perfeito. Prefere manhã ou tarde? Tem preferência de dia?" },
+        { tipo: "recebida", hora: "09:15", texto: "Tarde, quinta-feira se possível" },
+        { tipo: "enviada", hora: "09:15", texto: "Registrado! Vou encaminhar à recepção para confirmar o encaixe de quinta-feira à tarde. Uma ótima manhã!" }
+      ]
+    },
+    medico: {
+      etiqueta: "Triagem médica organizada",
+      acao: "recepção confirma o horário com a especialidade e o paciente já chega pré-cadastrado.",
+      campos: [
+        ["Paciente", "Carlos Eduardo Lima"],
+        ["Motivo", "Avaliação clínica — pressão alta e tontura"],
+        ["Tipo", "Primeira consulta · Cardiologia"],
+        ["Convênio", "Unimed (plano nacional)"],
+        ["Preferência", "Manhã — terça ou quarta-feira"]
+      ],
+      mensagens: [
+        { tipo: "recebida", hora: "10:04", texto: "Olá, bom dia. Preciso marcar uma consulta com cardiologista, tenho sentido tontura e pressão alta." },
+        { tipo: "enviada", hora: "10:04", texto: "Bom dia! Vou agilizar seu agendamento com nossa equipe. Qual seu nome completo?" },
+        { tipo: "recebida", hora: "10:05", texto: "Carlos Eduardo Lima" },
+        { tipo: "enviada", hora: "10:05", texto: "Obrigado, Carlos. É sua primeira consulta na clínica ou retorno?" },
+        { tipo: "recebida", hora: "10:05", texto: "Primeira consulta" },
+        { tipo: "enviada", hora: "10:06", texto: "Certo. O atendimento será por convênio ou particular?" },
+        { tipo: "recebida", hora: "10:06", texto: "Convênio Unimed" },
+        { tipo: "enviada", hora: "10:06", texto: "Perfeito. Qual turno e dias da semana são melhores para você?" },
+        { tipo: "recebida", hora: "10:07", texto: "De manhã, terça ou quarta-feira" },
+        { tipo: "enviada", hora: "10:07", texto: "Anotado! Já passei seus dados à recepção para confirmar o horário de terça ou quarta pela manhã." }
+      ]
+    },
+    lembrete: {
+      etiqueta: "Confirmação + NF-e pronta",
+      acao: "agenda protegida contra faltas e dados fiscais prontos para emitir a NF-e em 1 clique.",
+      campos: [
+        ["Paciente", "Mariana Costa"],
+        ["Lembrete 24h", "Confirmado (respondeu opção 1)"],
+        ["Risco de falta", "Reduzido — horário validado"],
+        ["Dados NF-e", "CPF e e-mail já coletados"],
+        ["Pós-consulta", "NF-e enviada no WhatsApp"]
+      ],
+      mensagens: [
+        { tipo: "enviada", hora: "14:00", texto: "Olá, Mariana! Lembrete da sua consulta amanhã (quinta) às 15h. Responda 1 para CONFIRMAR ou 2 para REMARCAR." },
+        { tipo: "recebida", hora: "14:03", texto: "1" },
+        { tipo: "enviada", hora: "14:03", texto: "Presença confirmada! Para agilizar sua nota fiscal após o atendimento, pode informar seu CPF e e-mail?" },
+        { tipo: "recebida", hora: "14:04", texto: "CPF 123.456.789-00 e mariana@email.com" },
+        { tipo: "enviada", hora: "14:04", texto: "Tudo pronto, Mariana! Assim que a consulta concluir, enviaremos sua NF-e por aqui mesmo. Até amanhã!" }
+      ]
+    },
+    pos_consulta: {
+      etiqueta: "Pós-consulta + Google",
+      acao: "paciente recebe a NF-e sem esforço e clientes satisfeitos geram novas avaliações 5 estrelas no Google.",
+      campos: [
+        ["Paciente", "Mariana Costa"],
+        ["NF-e", "Enviada em PDF no WhatsApp"],
+        ["Avaliação", "Nota 5 — direcionada ao Google"],
+        ["Nota baixa", "Encaminhada só ao gestor (privado)"],
+        ["Resultado", "Mais visibilidade orgânica no Maps"]
+      ],
+      mensagens: [
+        { tipo: "enviada", hora: "16:30", texto: "Olá, Mariana! Segue a NF-e do seu atendimento de hoje. De 1 a 5, como foi sua experiência na clínica?" },
+        { tipo: "recebida", hora: "16:34", texto: "5! Fui muito bem atendida, obrigada." },
+        { tipo: "enviada", hora: "16:34", texto: "Que ótimo saber! Se puder deixar sua avaliação no Google em 10 segundos, ajuda muito nossa equipe: g.page/clinica/avaliar" }
+      ]
+    }
+  };
+
   /* ---------- simulação da conversa ---------- */
   var conversa = document.getElementById("conversa");
   var digitando = document.getElementById("digitando");
   var painel = document.getElementById("painelResumo");
   var btn = document.getElementById("btnReplay");
+  var botoesCenario = Array.prototype.slice.call(document.querySelectorAll(".btn-cenario"));
   var chips = [
     document.getElementById("chip1"),
     document.getElementById("chip2"),
@@ -706,6 +1035,63 @@
   var mensagens = Array.prototype.slice.call(conversa.querySelectorAll(".msg"));
   var timers = [];
   var emExecucao = false;
+  var cenarioAtual = CENARIOS[segParam] ? segParam : "odonto";
+
+  function renderizarCenario(chave) {
+    var dados = CENARIOS[chave] || CENARIOS.odonto;
+    cenarioAtual = chave;
+    botoesCenario.forEach(function (b) {
+      b.classList.toggle("ativo", b.getAttribute("data-cenario") === chave);
+    });
+    // Atualiza mensagens na caixa sem perder #digitando
+    Array.prototype.slice.call(conversa.querySelectorAll(".msg")).forEach(function (el) {
+      el.remove();
+    });
+    dados.mensagens.forEach(function (m, idx) {
+      var div = document.createElement("div");
+      div.className = "msg " + m.tipo + " escondida";
+      div.appendChild(document.createTextNode(m.texto));
+      var span = document.createElement("span");
+      span.className = "hora";
+      span.textContent = m.hora;
+      div.appendChild(span);
+      if (idx === 0) {
+        conversa.insertBefore(div, digitando);
+      } else {
+        conversa.appendChild(div);
+      }
+    });
+    mensagens = Array.prototype.slice.call(conversa.querySelectorAll(".msg"));
+
+    // Atualiza painel de resumo com textContent seguro
+    var card = painel.querySelector(".card-resumo");
+    if (card) {
+      var etiq = card.querySelector(".etiqueta");
+      if (etiq && etiq.lastChild) {
+        etiq.lastChild.textContent = " " + dados.etiqueta;
+      }
+      var dl = card.querySelector("dl");
+      if (dl) {
+        dl.textContent = "";
+        dados.campos.forEach(function (par) {
+          var dt = document.createElement("dt");
+          dt.textContent = par[0];
+          var dd = document.createElement("dd");
+          dd.textContent = par[1];
+          dl.appendChild(dt);
+          dl.appendChild(dd);
+        });
+      }
+      var acao = card.querySelector(".acao");
+      if (acao) {
+        acao.textContent = "";
+        var st = document.createElement("strong");
+        st.textContent = "Próxima ação: ";
+        acao.appendChild(st);
+        acao.appendChild(document.createTextNode(dados.acao));
+      }
+    }
+  }
 
   function agendar(fn, ms) { timers.push(setTimeout(fn, ms)); }
   function rolarAoFim() { conversa.scrollTop = conversa.scrollHeight; }
@@ -713,8 +1099,8 @@
     chips.forEach(function (c, i) { c.classList.toggle("ativo", i <= indice); });
   }
 
-  function reproduzir() {
-    if (emExecucao) return;
+  function reproduzir(forcar) {
+    if (emExecucao && !forcar) return;
     emExecucao = true;
     btn.disabled = true;
     timers.forEach(clearTimeout);
@@ -745,7 +1131,7 @@
       tempo += duracaoDigitacao + esperaDigitacao;
     });
 
-    agendar(function () { ativarChip(1); }, 7000);
+    agendar(function () { ativarChip(1); }, Math.min(7000, Math.round(tempo * 0.45)));
     agendar(function () {
       ativarChip(2);
       painel.classList.remove("escondido");
@@ -754,7 +1140,14 @@
     }, tempo + 300);
   }
 
-  btn.addEventListener("click", reproduzir);
+  renderizarCenario(cenarioAtual);
+  botoesCenario.forEach(function (b) {
+    b.addEventListener("click", function () {
+      renderizarCenario(b.getAttribute("data-cenario"));
+      reproduzir(true);
+    });
+  });
+  btn.addEventListener("click", function () { reproduzir(true); });
 
   if ("IntersectionObserver" in window) {
     var obsChat = new IntersectionObserver(function (entradas) {
@@ -766,6 +1159,88 @@
   } else {
     reproduzir();
   }
+
+  /* ---------- barra de progresso + tilt 3D ---------- */
+  var barraProgresso = document.getElementById("scrollProgresso");
+  function atualizarProgresso() {
+    if (!barraProgresso) return;
+    var doc = document.documentElement;
+    var maxScroll = doc.scrollHeight - window.innerHeight;
+    var pct = maxScroll > 0 ? (window.scrollY / maxScroll) * 100 : 0;
+    barraProgresso.style.width = Math.min(100, Math.max(0, pct)) + "%";
+  }
+  window.addEventListener("scroll", atualizarProgresso, { passive: true });
+  atualizarProgresso();
+
+  if (window.matchMedia("(pointer: fine)").matches) {
+    document.querySelectorAll(".benef-card, .etapa-card").forEach(function (card) {
+      card.addEventListener("mousemove", function (e) {
+        var r = card.getBoundingClientRect();
+        var x = (e.clientX - r.left) / r.width - 0.5;
+        var y = (e.clientY - r.top) / r.height - 0.5;
+        card.style.transform = "perspective(700px) rotateX(" + (-y * 5) + "deg) rotateY(" + (x * 6) + "deg) translateY(-6px)";
+      });
+      card.addEventListener("mouseleave", function () {
+        card.style.transform = "";
+      });
+    });
+  }
+
+  /* ---------- calculadora de ROI ---------- */
+  var rMsgs = document.getElementById("roiMsgs");
+  var rFaltas = document.getElementById("roiFaltas");
+  var rTicket = document.getElementById("roiTicket");
+  var roiAnimState = { horas: null, receita: null, rafHoras: 0, rafReceita: 0 };
+
+  function animarNumero(el, chave, fim, formatar) {
+    if (!el) return;
+    var inicio = roiAnimState[chave];
+    if (inicio === null || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      roiAnimState[chave] = fim;
+      el.textContent = formatar(fim);
+      return;
+    }
+    if (inicio === fim) {
+      el.textContent = formatar(fim);
+      return;
+    }
+    var rafKey = chave === "horas" ? "rafHoras" : "rafReceita";
+    if (roiAnimState[rafKey]) cancelAnimationFrame(roiAnimState[rafKey]);
+    var t0 = performance.now();
+    var dur = 320;
+    function passo(agora) {
+      var p = Math.min(1, (agora - t0) / dur);
+      var eased = 1 - Math.pow(1 - p, 3);
+      var atual = Math.round(inicio + (fim - inicio) * eased);
+      roiAnimState[chave] = atual;
+      el.textContent = formatar(atual);
+      if (p < 1) {
+        roiAnimState[rafKey] = requestAnimationFrame(passo);
+      } else {
+        roiAnimState[chave] = fim;
+        roiAnimState[rafKey] = 0;
+      }
+    }
+    roiAnimState[rafKey] = requestAnimationFrame(passo);
+  }
+
+  function atualizarRoi() {
+    if (!rMsgs || !rFaltas || !rTicket) return;
+    var msgs = Number(rMsgs.value);
+    var faltas = Number(rFaltas.value);
+    var ticket = Number(rTicket.value);
+    var horas = Math.round((msgs * 2 * 22) / 60);
+    var receita = Math.round(faltas * 0.5 * 4 * ticket);
+    document.getElementById("roiMsgsVal").textContent = String(msgs);
+    document.getElementById("roiFaltasVal").textContent = String(faltas);
+    document.getElementById("roiTicketVal").textContent = "R$ " + ticket;
+    animarNumero(document.getElementById("roiHoras"), "horas", horas, function (v) { return "~" + v + " h/mês"; });
+    animarNumero(document.getElementById("roiReceita"), "receita", receita, function (v) { return "R$ " + v.toLocaleString("pt-BR") + "/mês"; });
+  }
+  [rMsgs, rFaltas, rTicket].forEach(function (el) {
+    if (el) el.addEventListener("input", atualizarRoi);
+  });
+  atualizarRoi();
 })();
 </script>
 </body>

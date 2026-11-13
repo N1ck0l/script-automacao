@@ -16,3 +16,6 @@ selenium>=4.20
 streamlit>=1.50
 pandas>=2.2
 plotly>=5.20
+
+# --- Opcional: geração do PDF de demonstração (gerar_demo_pdf.py) ---
+reportlab>=4.0

@@ -16,8 +16,10 @@ HTML = BASE / "index.html"
 SAIDA = BASE / "demonstracao.pdf"
 
 AZUL = colors.HexColor("#123a6b")
-AZUL_ESC = colors.HexColor("#0c2749")
+AZUL_ESC = colors.HexColor("#07162c")
 AZUL_CLARO = colors.HexColor("#eaf1fa")
+DOURADO = colors.HexColor("#d4af63")
+DOURADO_SUAVE = colors.HexColor("#fbf7ee")
 VERDE = colors.HexColor("#128c7e")
 VERDE_CLARO = colors.HexColor("#e9f6ef")
 VERMELHO_CLARO = colors.HexColor("#fbeeed")
@@ -65,28 +67,37 @@ def main() -> None:
     c.setTitle("Automações para Clínicas — Demonstração")
 
     # ---------------- cabeçalho ----------------
-    cab_h = 26 * mm
+    cab_h = 27 * mm
     c.setFillColor(AZUL_ESC)
     c.rect(0, H - cab_h, W, cab_h, stroke=0, fill=1)
+    c.setFillColor(DOURADO)
+    c.rect(0, H - cab_h, W, 1.2 * mm, stroke=0, fill=1)
+    c.setFont("Helvetica-Bold", 7.4)
+    c.drawCentredString(W / 2, H - 6.2 * mm, "RELATÓRIO EXECUTIVO · AUTOMAÇÕES PARA CLÍNICAS")
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 17)
-    c.drawCentredString(W / 2, H - 11 * mm, "Automações para Clínicas")
-    c.setFont("Helvetica", 9)
+    c.drawCentredString(W / 2, H - 13 * mm, "Atendimento Inteligente & Gestão Fiscal")
+    c.setFont("Helvetica", 8.8)
     c.drawCentredString(
-        W / 2, H - 16.5 * mm,
-        "Demonstração — triagem de pacientes pelo WhatsApp e emissão de NF-e")
-    c.setFillColor(colors.HexColor("#9fb4d4"))
-    c.setFont("Helvetica", 7.6)
+        W / 2, H - 18.2 * mm,
+        "Demonstração — triagem de pacientes pelo WhatsApp e emissão automática de NF-e")
+    c.setFillColor(colors.HexColor("#a9bddb"))
+    c.setFont("Helvetica", 7.5)
     c.drawCentredString(
-        W / 2, H - 21.5 * mm,
-        "Demonstração ilustrativa · funcionalidade já implantada em clínicas da região")
+        W / 2, H - 23 * mm,
+        "Documento ilustrativo · arquitetura já implantada em clínicas odontológicas e médicas")
 
     y = H - cab_h - 7 * mm
 
     # ---------------- etapa 1: triagem ----------------
-    c.setFillColor(AZUL)
-    c.setFont("Helvetica-Bold", 10.5)
-    c.drawString(M, y, "1. TRIAGEM PELO WHATSAPP")
+    c.setFillColor(DOURADO)
+    c.setFont("Helvetica-Bold", 10.2)
+    c.drawString(M, y, "01 ·")
+    c.setFillColor(AZUL_ESC)
+    c.drawString(M + 8 * mm, y, "TRIAGEM PELO WHATSAPP")
+    c.setStrokeColor(BORDA)
+    c.setLineWidth(0.6)
+    c.line(M + 58 * mm, y + 1.2 * mm, W - M, y + 1.2 * mm)
     y -= 4.6 * mm
     p_intro = par(
         "O paciente conversa normalmente; ao final, a recepção recebe a queixa "
@@ -165,9 +176,14 @@ def main() -> None:
     y = min(ty - h_a, ty - h_d, y - img_h) - 11 * mm
 
     # ---------------- etapa 2: NF-e ----------------
-    c.setFillColor(AZUL)
-    c.setFont("Helvetica-Bold", 10.5)
-    c.drawString(M, y, "2. EMISSÃO DE NF-E")
+    c.setFillColor(DOURADO)
+    c.setFont("Helvetica-Bold", 10.2)
+    c.drawString(M, y, "02 ·")
+    c.setFillColor(AZUL_ESC)
+    c.drawString(M + 8 * mm, y, "EMISSÃO DE NF-E E PÓS-ATENDIMENTO")
+    c.setStrokeColor(BORDA)
+    c.setLineWidth(0.6)
+    c.line(M + 82 * mm, y + 1.2 * mm, W - M, y + 1.2 * mm)
     y -= 4.6 * mm
     p2 = par(
         "Os dados do atendimento já estão capturados: a nota deixa de ser manual "
@@ -190,7 +206,7 @@ def main() -> None:
         par("<b>1.</b> dados já capturados na triagem", 7.9),
         par("<b>2.</b> nota gerada em poucos minutos", 7.9),
         par("<b>3.</b> equipe confere e valida em 1 clique", 7.9),
-        par("", 7.9),
+        par("<b>4.</b> NF-e enviada ao paciente no WhatsApp", 7.9),
         [par("poucos minutos · validação em um clique", 7.9, AZUL, True)],
     ]
     t_manual = Table([[x] for x in manual], colWidths=[col2 - 8])
@@ -219,9 +235,14 @@ def main() -> None:
     y -= h_m + 11 * mm
 
     # ---------------- como funciona ----------------
-    c.setFillColor(AZUL)
-    c.setFont("Helvetica-Bold", 10.5)
-    c.drawString(M, y, "3. COMO FUNCIONA A IMPLANTAÇÃO")
+    c.setFillColor(DOURADO)
+    c.setFont("Helvetica-Bold", 10.2)
+    c.drawString(M, y, "03 ·")
+    c.setFillColor(AZUL_ESC)
+    c.drawString(M + 8 * mm, y, "IMPLANTAÇÃO SEM ATRITO")
+    c.setStrokeColor(BORDA)
+    c.setLineWidth(0.6)
+    c.line(M + 61 * mm, y + 1.2 * mm, W - M, y + 1.2 * mm)
     y -= 5 * mm
     passos = [
         par("<b>1. Demonstração</b><br/>conversa de 10 minutos, online ou "
@@ -251,6 +272,8 @@ def main() -> None:
     cta_h = 34 * mm
     c.setFillColor(AZUL_ESC)
     c.rect(M, y - cta_h, W - 2 * M, cta_h, stroke=0, fill=1)
+    c.setFillColor(DOURADO)
+    c.rect(M, y - 1.2 * mm, W - 2 * M, 1.2 * mm, stroke=0, fill=1)
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 12)
     c.drawCentredString(W / 2, y - 9 * mm, "Quer ver funcionando na sua clínica?")

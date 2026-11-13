@@ -3,10 +3,15 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Runtime do projeto (dados de sessão, não do código)
+# Runtime e dados operacionais do projeto (não versionar dados de clientes)
 .perfil_whatsapp_web/
 *.csv.tmp
 .envio.lock
 logs/
 .rodizio_mineracao
+prospeccao.csv
+historico_envios.jsonl
+config.local.json

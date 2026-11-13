@@ -45,7 +45,44 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
+
+from prospeccao.calendario import (  # noqa: F401
+    FERIADOS_FIXOS,
+    _pascoa,
+    dentro_da_janela,
+    dia_util,
+    dias_uteis_entre,
+    eh_feriado,
+)
+from prospeccao.classificador import (  # noqa: F401
+    FRASES_BOT,
+    PADROES_NEGATIVA,
+    PADROES_OPTOUT,
+    classificar_resposta,
+    interpretar_bolha,
+    mensagens_recebidas,
+    opcao_atendente,
+    resposta_negativa,
+    resposta_para_robo,
+    resultado_entrega,
+    texto_confere,
+)
+from prospeccao.config import carregar_config
+from prospeccao.telefones import (  # noqa: F401
+    _escore_sinais,
+    _sem_acentos,
+    eh_celular,
+    inferir_segmento,
+    normalizar_telefone,
+    validar_telefone,
+)
+from prospeccao.trava import (  # noqa: F401
+    ARQUIVO_TRAVA,
+    EnvioEmAndamento,
+    TravaEnvio,
+    _processo_vivo,
+)
 
 # ---------------------------------------------------------------------------
 # 1. FONTES DE DADOS
@@ -73,7 +110,7 @@ def opcoes_janela(visivel: bool) -> list[str]:
 
 COLUNAS = ["clinica", "bairro", "cidade", "telefone", "site", "avaliacoes",
            "segmento", "status", "resposta", "atualizado_em", "ultimo_envio",
-           "followups", "variante", "etapa", "menu", "versao_textos"]
+           "followups", "variante", "etapa", "menu", "versao_textos", "estagio"]
 # segmento: "odonto" | "medico" — inferido na mineração (nome/termo de busca);
 #        filtro --segmento no envio; vazio = não classificado
 # variante: teste A/B ("curta" | "completa")
@@ -84,8 +121,27 @@ COLUNAS = ["clinica", "bairro", "cidade", "telefone", "site", "avaliacoes",
 # versao_textos: "versao" do mensagens.json usada no 1º envio (o A/B compara
 #        só contatos da versão atual; vazio = textos antigos)
 # menu: "respondido" quando o script já escolheu "falar com atendente" no robô
+# estagio: funil comercial pós-resposta ("reuniao_agendada" | "proposta_enviada"
+#        | "fechado" | "perdido")
 
-CIDADE_PADRAO = "Aracaju"
+ESTAGIOS_COMERCIAIS = ("reuniao_agendada", "proposta_enviada", "fechado", "perdido")
+
+
+def score_lead(contato: dict) -> int:
+    """Pontua o lead para priorizar a fila: celular > volume de avaliações > nota >= 4,5 > site."""
+    pontos = 1000 if eh_celular(contato.get("telefone") or "") else 0
+    aval = contato.get("avaliacoes") or ""
+    m_qtd = re.search(r"\((\d+)\s*avalia", aval)
+    if m_qtd:
+        pontos += min(int(m_qtd.group(1)), 500)
+    m_nota = re.search(r"(\d+[.,]\d+)", aval)
+    if m_nota and float(m_nota.group(1).replace(",", ".")) >= 4.5:
+        pontos += 50
+    if (contato.get("site") or "").strip():
+        pontos += 10
+    return pontos
+
+CIDADE_PADRAO = str(carregar_config().get("cidade_padrao") or "Aracaju")
 
 # Status do contato
 PENDENTE = "pendente"
@@ -110,75 +166,6 @@ LISTA_EXEMPLO = [
     {"clinica": "Centro Médico Exemplo", "bairro": "", "cidade": "Aracaju",
      "telefone": "5579900000002", "status": PENDENTE},
 ]
-
-
-def normalizar_telefone(tel: str) -> str:
-    """Remove formatação e garante DDI 55. Ex: (79) 99963-1871 -> 5579999631871.
-
-    Também remove o prefixo de trunk nacional ("0" + DDD), comum nas listagens
-    do Google Maps: 079996746397 -> 5579996746397.
-    """
-    digitos = re.sub(r"\D", "", tel)
-    if digitos.startswith("0") and len(digitos) in (11, 12):
-        digitos = digitos[1:]  # remove o 0 de acesso (trunk) antes do DDD
-    if len(digitos) <= 11 and not digitos.startswith("55"):  # número local
-        digitos = "55" + digitos
-    return digitos
-
-
-def validar_telefone(digitos: str) -> bool:
-    """Válido = DDI 55 + DDD + número fixo (8) ou celular (9) => 12 ou 13 dígitos."""
-    return bool(re.fullmatch(r"55\d{10,11}", digitos))
-
-
-def eh_celular(digitos: str) -> bool:
-    """Celular = 55 + DDD + 9 + 8 dígitos. Fixos raramente têm WhatsApp."""
-    return bool(re.fullmatch(r"55\d{2}9\d{8}", digitos))
-
-
-_SINAIS_ODONTO = (
-    "odontolog", "odont", "dentista", "dental", "dente", "ortodont",
-    "orthos", "implante dent", "implantodont", "endodont", "periodont",
-    "protese", "clareamento", "aparelho", "oral", "siso", "sorriso",
-    "sorrir", "sorria", "sorridents",
-)
-_SINAIS_MEDICO = (
-    "medic", "consultori", "consultorio", "hospital", "maternidade",
-    "fisioterapia", "dermatolog", "psicolog", "pediatr", "oftalmolog",
-    "nutri", "saude", "laborat", "diagnostico", "exame", "endoscop",
-    "ultrassom", "ginecolog", "cardio", "onco", "psiquiatr", "ortoped",
-    "traumato", "urolog", "neurolog", "gastro", "endocrino",
-    "fonoaudiolog", "cirurgia", "ambulatorio", "medicina",
-)
-
-
-def _sem_acentos(texto: str) -> str:
-    decomposto = unicodedata.normalize("NFD", texto)
-    return "".join(c for c in decomposto if unicodedata.category(c) != "Mn")
-
-
-def _escore_sinais(sinais: tuple[str, ...], baixo: str) -> int:
-    """Quantos sinais batem; subpalavras de outro sinal casado não contam
-    (evita "odont" somar junto de "odontolog")."""
-    casados = [s for s in sinais if s in baixo]
-    return sum(1 for s in casados
-               if not any(s != outro and s in outro for outro in casados))
-
-
-def inferir_segmento(texto: str) -> str:
-    """Classifica o texto (nome da clínica ou termo de busca).
-
-    Conta os sinais de cada segmento e vence o de maior escore (empate:
-    odonto). Retorna "" quando não há nenhum sinal.
-    """
-    baixo = _sem_acentos(texto or "").lower()
-    if not baixo:
-        return ""
-    odonto = _escore_sinais(_SINAIS_ODONTO, baixo)
-    medico = _escore_sinais(_SINAIS_MEDICO, baixo)
-    if odonto == 0 and medico == 0:
-        return ""
-    return "odonto" if odonto >= medico else "medico"
 
 
 def _inteiro(valor) -> int:
@@ -475,7 +462,7 @@ def montar_apresentacao(contato: dict, mensagens: dict | None = None,
     contexto.update(case=random.choice(m["cases"]),
                     cta_apresentacao=random.choice(m["ctas_apresentacao"]))
     return _com_link_demonstracao(
-        resolver_spintax(random.choice(m["estruturas_apresentacao"]), contexto), m)
+        resolver_spintax(random.choice(m["estruturas_apresentacao"]), contexto), m, contato)
 
 
 def montar_resumo_completa(contato: dict, mensagens: dict | None = None,
@@ -485,7 +472,7 @@ def montar_resumo_completa(contato: dict, mensagens: dict | None = None,
     m = mensagens or carregar_mensagens()
     return _com_link_demonstracao(
         resolver_spintax(random.choice(m["estruturas_resumo"]),
-                         _contexto(contato, m, agora)), m)
+                         _contexto(contato, m, agora)), m, contato)
 
 
 def montar_despedida(contato: dict, mensagens: dict | None = None,
@@ -503,10 +490,32 @@ def montar_texto_followup(contato: dict, mensagens: dict | None = None,
                             _contexto(contato, m, agora))
 
 
-def demonstracao_html(mensagens: dict | None = None) -> str:
-    """URL da demonstração interativa ('' = não enviar o link)."""
+def demonstracao_html(mensagens: dict | None = None,
+                      contato: dict | None = None) -> str:
+    """URL da demonstração interativa ('' = não enviar o link).
+
+    Quando `contato` é informado, personaliza com `?clinica=...&seg=...`
+    para a página exibir o nome da clínica e o roteiro do segmento certo.
+    """
     m = mensagens or carregar_mensagens()
-    return str((m.get("demonstracao") or {}).get("html") or "").strip()
+    url = str((m.get("demonstracao") or {}).get("html") or "").strip()
+    if not url or not contato:
+        return url
+    nome = nome_para_mensagem(
+        contato.get("clinica", ""),
+        contato.get("bairro", ""),
+        contato.get("cidade") or CIDADE_PADRAO,
+    )
+    seg = (contato.get("segmento") or inferir_segmento(contato.get("clinica", ""))).lower()
+    params = {}
+    if nome:
+        params["clinica"] = nome
+    if seg in SEGMENTOS:
+        params["seg"] = seg
+    if not params:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}{urlencode(params)}"
 
 
 def demonstracao_pdf(mensagens: dict | None = None) -> Path | None:
@@ -521,9 +530,10 @@ def demonstracao_pdf(mensagens: dict | None = None) -> Path | None:
     return caminho if caminho.is_file() else None
 
 
-def _com_link_demonstracao(texto: str, mensagens: dict) -> str:
+def _com_link_demonstracao(texto: str, mensagens: dict,
+                           contato: dict | None = None) -> str:
     """Acrescenta o link da demonstração quando hospedado (html preenchido)."""
-    url = demonstracao_html(mensagens)
+    url = demonstracao_html(mensagens, contato)
     return f"{texto}\n\nDemonstração interativa: {url}" if url else texto
 
 
@@ -538,17 +548,28 @@ def montar_link(contato: dict, mensagem: str) -> str:
 # 3. CONTROLE DE VOLUME (anti-ban) E HISTÓRICO
 # ---------------------------------------------------------------------------
 
+_CACHE_HISTORICO: dict[Path, tuple[tuple[int, int], list[dict]]] = {}
+
+
 def ler_historico() -> list[dict]:
-    if not ARQUIVO_LOG.exists():
+    caminho = Path(ARQUIVO_LOG)
+    if not caminho.exists():
         return []
+    chave = caminho.resolve()
+    stat = caminho.stat()
+    assinatura = (stat.st_mtime_ns, stat.st_size)
+    em_cache = _CACHE_HISTORICO.get(chave)
+    if em_cache and em_cache[0] == assinatura:
+        return list(em_cache[1])
     registros = []
-    with ARQUIVO_LOG.open(encoding="utf-8") as f:
+    with caminho.open(encoding="utf-8") as f:
         for linha in f:
             try:
                 registros.append(json.loads(linha))
             except json.JSONDecodeError:
                 continue
-    return registros
+    _CACHE_HISTORICO[chave] = (assinatura, registros)
+    return list(registros)
 
 
 # Fora do limite diário: escolher "falar com atendente" no robô e a 2ª etapa
@@ -603,56 +624,6 @@ def segundos_de_espera(ultimo: datetime | None, intervalo_alvo: int,
     return max(0, math.ceil(intervalo_alvo - decorrido))
 
 
-def dentro_da_janela(inicio: int, fim: int, agora: datetime | None = None) -> bool:
-    """True se 'agora' estiver dentro da janela de horário comercial."""
-    hora = (agora or datetime.now()).hour
-    return inicio <= hora < fim
-
-
-# Feriados fixos (mês, dia): nacionais + Sergipe + Aracaju, e vésperas em que
-# clínicas costumam fechar. Ajuste se prospectar em outra cidade.
-FERIADOS_FIXOS = {
-    (1, 1), (4, 21), (5, 1), (9, 7), (10, 12), (11, 2), (11, 15), (11, 20),
-    (12, 25),                      # nacionais
-    (7, 8),                        # Emancipação Política de Sergipe
-    (3, 17), (12, 8),              # Aniversário de Aracaju; N. Sra. da Conceição
-    (12, 24), (12, 31),            # vésperas de Natal e Ano Novo
-}
-
-
-def _pascoa(ano: int):
-    """Domingo de Páscoa (algoritmo de Meeus/Jones/Butcher)."""
-    from datetime import date
-    a, b, c = ano % 19, ano // 100, ano % 100
-    d, e = b // 4, b % 4
-    f = (b + 8) // 25
-    g = (b - f + 1) // 3
-    h = (19 * a + b - d - g + 15) % 30
-    i, k = c // 4, c % 4
-    l_ = (32 + 2 * e + 2 * i - h - k) % 7
-    m = (a + 11 * h + 22 * l_) // 451
-    mes = (h + l_ - 7 * m + 114) // 31
-    dia = ((h + l_ - 7 * m + 114) % 31) + 1
-    return date(ano, mes, dia)
-
-
-def eh_feriado(dia) -> bool:
-    """Feriado fixo ou móvel (Carnaval, Quarta de Cinzas, Sexta Santa, Corpus Christi)."""
-    from datetime import timedelta
-    dia = dia.date() if isinstance(dia, datetime) else dia
-    if (dia.month, dia.day) in FERIADOS_FIXOS:
-        return True
-    pascoa = _pascoa(dia.year)
-    moveis = {pascoa + timedelta(days=n) for n in (-48, -47, -46, -2, 60)}
-    return dia in moveis
-
-
-def dia_util(agora: datetime | None = None) -> bool:
-    """Segunda a sexta, exceto feriados. Fora disso, prospecção parece automação."""
-    agora = agora or datetime.now()
-    return agora.weekday() < 5 and not eh_feriado(agora)
-
-
 def atualizar_historico(contato: dict, mensagem: str, modo: str,
                         tipo: str = INICIAL, variante: str = "") -> None:
     """Anexa o envio ao log JSONL (auditoria)."""
@@ -668,9 +639,11 @@ def atualizar_historico(contato: dict, mensagem: str, modo: str,
     }
     with ARQUIVO_LOG.open("a", encoding="utf-8") as f:
         f.write(json.dumps(registro, ensure_ascii=False) + "\n")
+    _CACHE_HISTORICO.pop(Path(ARQUIVO_LOG).resolve(), None)
 
 
-def marcar_enviado(contato: dict, planilha: Planilha, tipo: str = INICIAL) -> None:
+def marcar_enviado(contato: dict, planilha: Planilha, tipo: str = INICIAL,
+                   salvar: bool = True) -> None:
     """Atualiza status/timestamps do contato e grava o CSV."""
     agora = datetime.now().isoformat(timespec="seconds")
     contato["status"] = ENVIADO
@@ -679,7 +652,8 @@ def marcar_enviado(contato: dict, planilha: Planilha, tipo: str = INICIAL) -> No
     contato["ultimo_envio"] = agora
     if tipo == FOLLOWUP:
         contato["followups"] = str(_inteiro(contato.get("followups")) + 1)
-    planilha.salvar()
+    if salvar:
+        planilha.salvar()
 
 
 def precisa_followup(contato: dict, dias: int, max_followups: int,
@@ -695,17 +669,6 @@ def precisa_followup(contato: dict, dias: int, max_followups: int,
     if referencia is None:
         return False
     return dias_uteis_entre(referencia, agora or datetime.now()) >= dias
-
-
-def dias_uteis_entre(inicio: datetime, fim: datetime) -> int:
-    """Dias úteis depois de `inicio` até `fim` (inclusive)."""
-    from datetime import timedelta
-    dia, total = inicio.date(), 0
-    while dia < fim.date():
-        dia += timedelta(days=1)
-        if dia_util(datetime(dia.year, dia.month, dia.day, 12)):
-            total += 1
-    return total
 
 
 def reabrir_fila(contatos: list[dict]) -> int:
@@ -725,84 +688,6 @@ def reabrir_fila(contatos: list[dict]) -> int:
         c["atualizado_em"] = agora
         reabertos += 1
     return reabertos
-
-
-ARQUIVO_TRAVA = BASE_DIR / ".envio.lock"
-_TRAVA_PROFUNDIDADE = 0  # reentrância dentro do mesmo processo
-
-
-def _processo_vivo(pid: int) -> bool:
-    """True se o PID existe. (No Windows, os.kill(pid, 0) MATARIA o processo.)"""
-    if pid <= 0:
-        return False
-    if sys.platform == "win32":
-        import ctypes
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
-        if not handle:
-            return False
-        try:
-            codigo = ctypes.c_ulong()
-            kernel32.GetExitCodeProcess(handle, ctypes.byref(codigo))
-            return codigo.value == 259  # STILL_ACTIVE
-        finally:
-            kernel32.CloseHandle(handle)
-    import os
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-class EnvioEmAndamento(RuntimeError):
-    """Outro processo já está enviando (ou usando o perfil do WhatsApp Web)."""
-
-
-class TravaEnvio:
-    """Garante UM único processo enviando por vez (arquivo .envio.lock com o PID).
-
-    Reentrante no mesmo processo; trava de processo morto é descartada.
-    """
-
-    def __init__(self, caminho: Path | None = None) -> None:
-        self.caminho = Path(caminho or ARQUIVO_TRAVA)
-
-    def __enter__(self) -> "TravaEnvio":
-        import os
-        global _TRAVA_PROFUNDIDADE
-        if _TRAVA_PROFUNDIDADE:
-            _TRAVA_PROFUNDIDADE += 1
-            return self
-        for _ in range(2):
-            try:
-                fd = os.open(self.caminho, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                try:
-                    dono = int(self.caminho.read_text(encoding="utf-8").strip() or 0)
-                except (OSError, ValueError):
-                    dono = 0
-                if dono and dono != os.getpid() and _processo_vivo(dono):
-                    raise EnvioEmAndamento(
-                        f"Outro envio está em andamento (processo {dono}). Aguarde "
-                        f"ele terminar ou feche-o; se tiver certeza de que não há "
-                        f"nenhum, apague {self.caminho.name}.")
-                self.caminho.unlink(missing_ok=True)  # trava órfã
-                continue
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(str(os.getpid()))
-            _TRAVA_PROFUNDIDADE = 1
-            return self
-        raise EnvioEmAndamento(f"Não foi possível criar {self.caminho.name}.")
-
-    def __exit__(self, *_exc) -> None:
-        global _TRAVA_PROFUNDIDADE
-        _TRAVA_PROFUNDIDADE -= 1
-        if _TRAVA_PROFUNDIDADE <= 0:
-            _TRAVA_PROFUNDIDADE = 0
-            self.caminho.unlink(missing_ok=True)
 
 
 def verificar_limite_diario(limite: int) -> bool:
@@ -883,17 +768,6 @@ def enviar_modo_manual(contato: dict, mensagem: str) -> bool:
     return True
 
 
-def texto_confere(texto_na_caixa: str, mensagem: str) -> bool:
-    """A caixa contém exatamente a mensagem (nem a mais, nem a menos)?
-
-    Compara só letras e números: o WhatsApp Web renderiza emoji como imagem
-    e pode mexer em espaços/quebras, mas texto duplicado ou faltando aparece.
-    """
-    def nucleo(s: str) -> str:
-        return re.sub(r"[\W_]+", "", s or "").lower()
-    return bool(nucleo(mensagem)) and nucleo(texto_na_caixa) == nucleo(mensagem)
-
-
 class SessaoWeb:
     """WhatsApp Web via Selenium, com UM navegador reaproveitado na sessão.
 
@@ -903,9 +777,43 @@ class SessaoWeb:
     duplicaria a mensagem.
     """
 
-    SELETOR_CAIXA = ('footer div[contenteditable="true"], '
-                     'div[contenteditable="true"][data-tab="10"], '
-                     'div[contenteditable="true"][data-tab="6"]')
+    SELETORES = {
+        "caixa": ('footer div[contenteditable="true"], '
+                  'div[contenteditable="true"][data-tab="10"], '
+                  'div[contenteditable="true"][data-tab="6"]'),
+        "lista_chats": '#pane-side',
+        "qr": "canvas[aria-label*='QR' i], [data-ref] canvas",
+        "dialogo": "[role='dialog'], [data-animate-modal-popup]",
+        "bolha": "#main [data-pre-plain-text]",
+        "bolha_texto": "[data-testid='selectable-text']",
+        "anexar": ('div[title="Anexar"], div[title="Attach"], '
+                   'span[data-icon="plus"], span[data-icon="clip"]'),
+        "enviar": 'span[data-icon="send"]',
+    }
+    SELETOR_CAIXA = SELETORES["caixa"]
+
+    def healthcheck(self, segundos: int = 25) -> dict:
+        """Verifica se o WhatsApp Web está logado e com os seletores esperados."""
+        from selenium.webdriver.common.by import By
+        driver = self._garantir_driver()
+        driver.get("https://web.whatsapp.com/")
+        fim = time.time() + segundos
+        status = "timeout"
+        while time.time() < fim:
+            if driver.find_elements(By.CSS_SELECTOR, self.SELETORES["lista_chats"]):
+                status = "conectado"
+                break
+            if driver.find_elements(By.CSS_SELECTOR, self.SELETORES["qr"]):
+                status = "deslogado"
+                break
+            time.sleep(0.5)
+        return {
+            "status": status,
+            "seletores_ativos": {
+                k: len(driver.find_elements(By.CSS_SELECTOR, v))
+                for k, v in self.SELETORES.items()
+            },
+        }
 
     def __init__(self) -> None:
         self.driver = None
@@ -1273,6 +1181,12 @@ def gerenciar_respostas(contatos: list[dict], planilha: Planilha) -> None:
                      "/ [ENTER] manter: ").strip().lower()
         if acao == "s":
             c["resposta"] = "respondeu"
+            est = input("Estágio comercial? [1] reunião  [2] proposta  "
+                        "[3] fechado  [4] perdido  [ENTER] manter: ").strip()
+            mapa_est = {"1": "reuniao_agendada", "2": "proposta_enviada",
+                        "3": "fechado", "4": "perdido"}
+            if est in mapa_est:
+                c["estagio"] = mapa_est[est]
         elif acao == "n":
             c["resposta"] = "sem resposta"
         elif acao == "x":
@@ -1587,83 +1501,6 @@ def clinicas_ja_contatadas(contatos: list[dict]) -> set[str]:
 
 # --- Leitura das conversas (somente leitura) --------------------------------
 
-_RE_PRE = re.compile(r"\[(\d{1,2}):(\d{2}), (\d{1,2})/(\d{1,2})/(\d{4})\]\s*(.*?):\s*$")
-
-FRASES_BOT = (
-    "seja bem-vindo", "seja bem vindo", "agradece seu contato", "agradece o seu contato",
-    "obrigado pelo contato", "obrigada pelo contato", "estamos ausentes",
-    "escolha uma das opções", "escolha uma das opcoes", "digite o número",
-    "digite o numero", "retornaremos", "horário de atendimento",
-    "horario de atendimento", "mensagem automática", "mensagem automatica",
-    "assim que possível", "em breve",
-)
-PADROES_OPTOUT = (
-    r"\bn[ãa]o\s+(?:tenho|temos|h[áa])\s+interesse", r"\bsem\s+interesse\b",
-    r"\bpare\b", r"\bremov", r"\bdescadastr", r"\bn[ãa]o\s+(?:me\s+)?(?:envie|mande)",
-    r"\bn[ãa]o\s+entre\s+em\s+contato",
-    # as mensagens dizem "se não for relevante, é só me avisar":
-    r"\bn[ãa]o\s+(?:[ée]|seria|[ée]\s+do\s+nosso)\s+(?:relevante|interesse|necess[áa]rio)",
-    r"\bn[ãa]o\s+(?:precisamos|estamos\s+precisando|temos\s+necessidade)",
-)
-
-# Respostas negativas que NÃO são pedido de opt-out ("Não", "Não, obrigado",
-# "Já temos", "No momento não"): a pessoa é avisada ao operador, mas o script
-# não manda apresentação/resumo sozinho — seria empurrar venda para quem
-# acabou de dizer não.
-PADROES_NEGATIVA = (
-    r"^\W*n[ãa]o\b", r"\bj[áa]\s+(?:temos|usamos|tem|utilizamos)\b",
-    r"\b(?:agora|no\s+momento|por\s+enquanto)\s+n[ãa]o\b", r"\bobrigad[oa],?\s+mas\b",
-    r"\bagrade[çc]o,?\s+mas\b",
-)
-
-
-def resposta_negativa(textos: list[str]) -> bool:
-    """True se alguma resposta da pessoa soa como recusa (sem ser opt-out)."""
-    return any(re.search(p, t.strip().lower()) for t in textos for p in PADROES_NEGATIVA)
-
-
-def interpretar_bolha(pre: str, texto: str) -> dict:
-    """Converte o atributo data-pre-plain-text ('[08:25, 10/11/2026] Nome: ')."""
-    m = _RE_PRE.match(pre or "")
-    quando = None
-    remetente = ""
-    if m:
-        hh, mi, dd, mm, aaaa, remetente = m.groups()
-        try:
-            quando = datetime(int(aaaa), int(mm), int(dd), int(hh), int(mi))
-        except ValueError:
-            quando = None
-    return {"remetente": remetente.strip(), "quando": quando, "texto": texto or ""}
-
-
-def classificar_resposta(bolhas: list[dict], enviadas: list[str],
-                         desde: datetime) -> str | None:
-    """Classifica o que a clínica respondeu depois do nosso envio.
-
-    Retorna "sem interesse" | "respondeu" | "resposta automatica" | None (nada).
-    Resposta em até 2 min ou com frase típica de robô conta como automática —
-    4 de 5 clínicas do primeiro lote responderam com robô.
-    """
-    eu = next((b["remetente"] for b in bolhas
-               if any(texto_confere(b["texto"], e) for e in enviadas)), None)
-    if eu is None:
-        return None  # não achamos nossa mensagem: não dá para separar os lados
-    inicio = desde.replace(second=0, microsecond=0)
-    recebidas = [b for b in bolhas
-                 if b["remetente"] != eu and b["quando"] and b["quando"] >= inicio]
-    if not recebidas:
-        return None
-    texto_todo = " ".join(b["texto"].lower() for b in recebidas)
-    if any(re.search(p, texto_todo) for p in PADROES_OPTOUT):
-        return "sem interesse"
-
-    def automatica(b: dict) -> bool:
-        rapida = (b["quando"] - inicio).total_seconds() <= 120
-        return rapida or any(f in b["texto"].lower() for f in FRASES_BOT)
-
-    return "respondeu" if any(not automatica(b) for b in recebidas) else "resposta automatica"
-
-
 JS_BOLHAS = """
 return [...document.querySelectorAll('#main [data-pre-plain-text]')].map(b => {
   const t = b.querySelector('[data-testid="selectable-text"]');
@@ -1724,53 +1561,6 @@ def mensagens_enviadas_por_numero(desde_dias: int = 30) -> dict[str, list[dict]]
     return grupos
 
 
-def resultado_entrega(bolhas: list[dict], mensagem: str, enviado_em: datetime) -> str:
-    """"ok" | "duplicada" | "ausente" | "inconclusivo".
-
-    O WhatsApp Web recém-aberto só tem a ÚLTIMA mensagem de cada conversa; o
-    resto vem do celular sob demanda (0 a 30+ s). Se a nossa mensagem não é a
-    última (o robô da clínica respondeu depois), ela pode simplesmente ainda
-    não ter chegado ao navegador. Só dá para afirmar "ausente" quando o
-    histórico carregado começa ANTES do envio.
-    """
-    vezes = sum(1 for b in bolhas if texto_confere(b["texto"], mensagem))
-    if vezes == 1:
-        return "ok"
-    if vezes > 1:
-        return "duplicada"
-    minuto_envio = enviado_em.replace(second=0, microsecond=0)
-    if any(b["quando"] and b["quando"] < minuto_envio for b in bolhas):
-        return "ausente"
-    return "inconclusivo"
-
-
-_RE_MENU_ATENDENTE = re.compile(
-    r"(?im)^[\s*_~]*(\d{1,2})[\ufe0f\u20e3]*[\s*_~]*[-–—.):]?[\s*_~]*"
-    r"(?:falar|conversar)\s+com\s+(?:um|uma|o|a|nossa|nosso)?\s*"
-    r"(?:atendente|recepcionista|secret[áa]ri[oa]|humano|pessoa|equipe|recep[çc][ãa]o)")
-
-
-def opcao_atendente(textos: list[str]) -> str | None:
-    """Número da opção "falar com atendente" num menu de robô, se houver."""
-    for texto in textos:
-        m = _RE_MENU_ATENDENTE.search(texto or "")
-        if m:
-            return m.group(1)
-    return None
-
-
-def mensagens_recebidas(bolhas: list[dict], enviadas: list[str],
-                        desde: datetime) -> list[dict]:
-    """Bolhas da clínica (não são nossas) a partir de `desde`."""
-    inicio = desde.replace(second=0, microsecond=0)
-    nossas = [b for b in bolhas if any(texto_confere(b["texto"], e) for e in enviadas)]
-    eu = nossas[0]["remetente"] if nossas else None
-    return [b for b in bolhas
-            if b["quando"] and b["quando"] >= inicio
-            and (b["remetente"] != eu if eu else
-                 not any(texto_confere(b["texto"], e) for e in enviadas))]
-
-
 def verificar_conversas(planilha: Planilha, sessao: "SessaoWeb",
                         max_conversas: int = 40) -> dict:
     """Uma passada de leitura: confere as entregas de hoje e lê respostas.
@@ -1829,17 +1619,20 @@ def verificar_conversas(planilha: Planilha, sessao: "SessaoWeb",
             resposta = classificar_resposta(bolhas, enviadas, desde)
             primeiro = _data(historico[tel][0].get("timestamp", "")) or desde
             recebidas = mensagens_recebidas(bolhas, enviadas, primeiro)
+            alterado = False
             if resposta == "respondeu" and _segunda_etapa(contato):
                 ultimas = [b["texto"] for b in mensagens_recebidas(bolhas, enviadas, desde)]
                 if resposta_negativa(ultimas):
-                    contato["etapa"] = "recusou"  # não insiste; o operador decide
+                    if contato.get("etapa") != "recusou":
+                        contato["etapa"] = "recusou"  # não insiste; o operador decide
+                        alterado = True
                 else:
                     relatorio["acoes"].append((_segunda_etapa(contato), tel, None))
             if resposta != "respondeu" and resposta != "sem interesse" \
                     and not contato.get("menu"):
-                digito = opcao_atendente([b["texto"] for b in recebidas])
-                if digito:
-                    relatorio["acoes"].append(("menu", tel, digito))
+                resp_robo = resposta_para_robo([b["texto"] for b in recebidas])
+                if resp_robo:
+                    relatorio["acoes"].append(("menu", tel, resp_robo))
             if resposta and resposta != contato.get("resposta"):
                 contato["resposta"] = resposta
                 contato["atualizado_em"] = datetime.now().isoformat(timespec="seconds")
@@ -1858,18 +1651,37 @@ def verificar_conversas(planilha: Planilha, sessao: "SessaoWeb",
                         (nome, (ultimas[-1]["texto"] if ultimas else "")[:200]))
                 else:
                     relatorio["automaticas"].append(nome)
+                alterado = True
+            if alterado:
                 planilha.salvar()
     return relatorio
 
 
 # --- Avisos -------------------------------------------------------------------
 
-def notificar_windows(titulo: str, texto: str) -> None:
-    """Notificação do Windows (canto da tela). Silenciosa se não for possível."""
+def notificar_sistema(titulo: str, texto: str) -> None:
+    """Notificação nativa (Windows Toast, Linux notify-send, macOS osascript)."""
+    import subprocess
+    if sys.platform.startswith("linux"):
+        try:
+            subprocess.run(["notify-send", titulo, texto[:250]],
+                           timeout=10, capture_output=True)
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    if sys.platform == "darwin":
+        try:
+            t_esc = titulo.replace('"', '\\"')
+            m_esc = texto[:250].replace('"', '\\"')
+            subprocess.run(["osascript", "-e",
+                            f'display notification "{m_esc}" with title "{t_esc}"'],
+                           timeout=10, capture_output=True)
+        except Exception:  # noqa: BLE001
+            pass
+        return
     if sys.platform != "win32":
         return
     import base64
-    import subprocess
     from xml.sax.saxutils import escape
     xml = ("<toast><visual><binding template='ToastGeneric'>"
            f"<text>{escape(titulo)}</text><text>{escape(texto[:250])}</text>"
@@ -1891,6 +1703,9 @@ def notificar_windows(titulo: str, texto: str) -> None:
                        timeout=30, capture_output=True)
     except Exception:  # noqa: BLE001
         pass
+
+
+notificar_windows = notificar_sistema  # alias de compatibilidade
 
 
 def montar_resumo(enviadas: list[str], sem_whatsapp: list[str], puladas: list[str],
@@ -2175,7 +1990,7 @@ def rodar_automatico(planilha: Planilha, args: argparse.Namespace,
     try:
         cota = args.limite_dia - envios_hoje()
         candidatos = [c for c in planilha.contatos if c["status"] == PENDENTE]
-        novos = sorted(candidatos, key=lambda c: not eh_celular(c["telefone"]))  # celulares 1º
+        novos = sorted(candidatos, key=score_lead, reverse=True)  # celulares + maior potencial 1º
         retomar = [c for c in planilha.contatos
                    if precisa_followup(c, getattr(args, "dias_followup", 2),
                                        getattr(args, "max_followups", 1))]
@@ -2228,7 +2043,7 @@ def rodar_automatico(planilha: Planilha, args: argparse.Namespace,
             resultado = _envio_automatico(sessao, contato, mensagem)
             if resultado in ("ok", "nao_conferido"):
                 atualizar_historico(contato, mensagem, "automatico", tipo_hist, variante)
-                marcar_enviado(contato, planilha, tipo_hist)
+                marcar_enviado(contato, planilha, tipo_hist, salvar=(origem != "novo"))
                 if origem == "novo":
                     contato["variante"] = variante
                     contato["etapa"] = "abertura" if variante == "curta" else "apresentacao"
@@ -2382,6 +2197,8 @@ def _criar_parser() -> argparse.ArgumentParser:
     parser.add_argument("--conectar", action="store_true",
                         help="Abre o WhatsApp Web do script para escanear o QR Code "
                              "(janela visível)")
+    parser.add_argument("--healthcheck", action="store_true",
+                        help="Verifica login e seletores do WhatsApp Web sem enviar nada")
     parser.add_argument("--mostrar-janela", action="store_true",
                         help="Mostra a janela do Chrome (padrão: abre fora da tela, "
                              "sem saltar na frente do que você está fazendo)")
@@ -2420,6 +2237,19 @@ def main() -> None:
         return
     if args.conectar:
         conectar_whatsapp()
+        return
+    if args.healthcheck:
+        sessao = SessaoWeb()
+        try:
+            res = sessao.healthcheck()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[HEALTHCHECK] Erro: {exc}")
+            sys.exit(1)
+        finally:
+            sessao.fechar()
+        print(f"[HEALTHCHECK] Status: {res['status']}")
+        for k, qtd in res["seletores_ativos"].items():
+            print(f"  - {k}: {qtd} elemento(s)")
         return
     if args.verificar:
         sessao = SessaoWeb()

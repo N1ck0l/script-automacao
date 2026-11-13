@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from pathlib import Path
 
@@ -8,18 +7,16 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from prospeccao.metricas import (
+    STATUS_CORES,
+    STATUS_ORDEM,
+    aplicar_filtros,
+    calcular_kpis,
+    preparar_dataframe,
+)
+
 BASE_DIR = Path(__file__).resolve().parent
 CSV_PATH = BASE_DIR / "prospeccao.csv"
-
-STATUS_ORDEM = ["pendente", "enviado", "nao_contatar"]
-STATUS_CORES = {
-    "pendente": "#94a3b8",
-    "enviado": "#f59e0b",
-    "nao_contatar": "#ef4444",
-}
-RESPOSTAS_SEM_RESPOSTA = {
-    "", "sem resposta", "aguardando", "resposta automatica",
-}
 
 st.set_page_config(
     page_title="Dashboard de Prospecção",
@@ -32,91 +29,12 @@ st.set_page_config(
 @st.cache_data(show_spinner=False)
 def carregar_dados(caminho: str, mtime: float) -> pd.DataFrame:
     df = pd.read_csv(caminho, dtype=str, keep_default_na=False)
-    df.columns = [c.strip() for c in df.columns]
-    for coluna in ("clinica", "bairro", "cidade", "telefone", "site",
-                   "avaliacoes", "segmento", "status", "resposta", "variante",
-                   "etapa", "menu", "versao_textos"):
-        if coluna not in df.columns:
-            df[coluna] = ""
-        df[coluna] = df[coluna].fillna("").astype(str).str.strip()
-    df["nota"] = df["avaliacoes"].map(_extrair_nota)
-    df["qtd_avaliacoes"] = df["avaliacoes"].map(_extrair_qtd_avaliacoes)
-    df["ultimo_envio_dt"] = pd.to_datetime(
-        df["ultimo_envio"], errors="coerce", format="mixed"
-    )
-    df["atualizado_em_dt"] = pd.to_datetime(
-        df["atualizado_em"], errors="coerce", format="mixed"
-    )
-    df["resposta"] = df["resposta"].replace({"": "sem resposta"})
-    df["status"] = df["status"].replace({"": "desconhecido"})
-    df["whatsapp"] = df["telefone"].map(_link_whatsapp)
-    df["respondeu"] = ~df["resposta"].isin(RESPOSTAS_SEM_RESPOSTA)
-    df["opt_out"] = (df["resposta"] == "sem interesse") | (
-        df["status"] == "nao_contatar"
-    )
-    hoje = pd.Timestamp(datetime.now().date())
-    df["dias_sem_resposta"] = (hoje - df["ultimo_envio_dt"]).dt.days
-    df["followup_pendente"] = (
-        (df["resposta"] == "aguardando")
-        & df["ultimo_envio_dt"].notna()
-        & (df["dias_sem_resposta"] >= 3)
-    )
-    return df
-
-
-def _extrair_nota(texto: str) -> float:
-    match = re.search(r"(\d+[.,]\d+)", texto or "")
-    if not match:
-        return float("nan")
-    return float(match.group(1).replace(",", "."))
-
-
-def _extrair_qtd_avaliacoes(texto: str) -> float:
-    match = re.search(r"\((\d+)\s*avalia", texto or "")
-    if not match:
-        return float("nan")
-    return float(match.group(1))
-
-
-def _link_whatsapp(telefone: str) -> str:
-    digitos = re.sub(r"\D", "", telefone or "")
-    if not digitos:
-        return ""
-    if digitos.startswith("55") and len(digitos) > 11:
-        return f"https://wa.me/{digitos}"
-    if len(digitos) <= 11:
-        return f"https://wa.me/55{digitos}"
-    return f"https://wa.me/{digitos}"
+    return preparar_dataframe(df)
 
 
 @st.cache_data(show_spinner=False)
 def mtime_csv(caminho: str) -> float:
     return Path(caminho).stat().st_mtime
-
-
-def aplicar_filtros(df: pd.DataFrame, f: dict) -> pd.DataFrame:
-    out = df
-    segs_sel = [s for s in f["segmento"] if s != "(sem segmento)"]
-    mascara_seg = out["segmento"].isin(segs_sel)
-    if "(sem segmento)" in f["segmento"]:
-        mascara_seg |= out["segmento"] == ""
-    out = out[mascara_seg]
-    out = out[out["status"].isin(f["status"])]
-    out = out[out["resposta"].isin(f["resposta"])]
-    bairros_sel = [b for b in f["bairro"] if b != "(sem bairro)"]
-    mascara_bairro = out["bairro"].isin(bairros_sel)
-    if "(sem bairro)" in f["bairro"]:
-        mascara_bairro |= out["bairro"] == ""
-    out = out[mascara_bairro]
-    if f["busca"]:
-        mascara = (
-            out["clinica"].str.contains(f["busca"], case=False, na=False)
-            | out["telefone"].str.contains(f["busca"], na=False)
-        )
-        out = out[mascara]
-    if f["nota_min"] > 0:
-        out = out[out["nota"] >= f["nota_min"]]
-    return out
 
 
 def kpi(coluna, rotulo: str, valor, ajuda: str | None = None) -> None:
@@ -185,12 +103,13 @@ def main() -> None:
         st.warning("Nenhum registro com os filtros atuais.")
         return
 
-    enviados = filtrado[filtrado["status"] == "enviado"]
-    reais = filtrado[filtrado["respondeu"]]
-    opt_outs = filtrado[filtrado["opt_out"]]
-    fila = filtrado[filtrado["status"] == "pendente"]
-    followups = filtrado[filtrado["followup_pendente"]]
-    taxa = (len(reais) / len(enviados) * 100) if len(enviados) else 0.0
+    kpis = calcular_kpis(filtrado)
+    enviados = kpis["enviados"]
+    reais = kpis["reais"]
+    opt_outs = kpis["opt_outs"]
+    fila = kpis["fila"]
+    followups = kpis["followups"]
+    taxa = kpis["taxa"]
 
     tab_geral, tab_analise, tab_tabela = st.tabs(
         ["📈 Visão geral", "🔍 Análise", "📋 Contatos"]
@@ -257,7 +176,7 @@ def main() -> None:
 
         st.subheader(f"⏱ Follow-ups pendentes ({len(followups)})")
         st.caption(
-            "Aguardando resposta há 3+ dias — candidatos a retomar a conversa."
+            "Sem resposta há 2+ dias úteis — candidatos a retomar a conversa."
         )
         if followups.empty:
             st.success("Nenhum follow-up pendente.")
@@ -404,6 +323,23 @@ def main() -> None:
             )
             st.plotly_chart(fig_var, width="stretch")
 
+        st.subheader("Funil comercial (estágio pós-resposta)")
+        estagios = filtrado[filtrado["estagio"] != ""]["estagio"]
+        if estagios.empty:
+            st.info("Nenhum estágio comercial registrado ainda (use --respostas).")
+        else:
+            cont_est = estagios.value_counts().reset_index()
+            cont_est.columns = ["estagio", "qtd"]
+            fig_est = px.bar(
+                cont_est, x="estagio", y="qtd",
+                color_discrete_sequence=["#16a34a"],
+            )
+            fig_est.update_layout(
+                template="plotly_white", height=300,
+                margin=dict(t=10, b=10), showlegend=False,
+            )
+            st.plotly_chart(fig_est, width="stretch")
+
     with tab_tabela:
         st.subheader(f"Contatos ({len(filtrado)})")
         st.caption("Clique em WhatsApp/site para abrir direto no navegador.")
@@ -417,7 +353,7 @@ def main() -> None:
         exibir = tabela[
             [
                 "clinica", "segmento", "bairro", "nota_fmt", "avaliacoes_qtd",
-                "whatsapp", "site", "status", "resposta", "etapa",
+                "whatsapp", "site", "status", "resposta", "estagio", "etapa",
                 "variante", "followups", "ultimo_envio",
             ]
         ].rename(
@@ -431,6 +367,7 @@ def main() -> None:
                 "site": "Site",
                 "status": "Status",
                 "resposta": "Resposta",
+                "estagio": "Estágio",
                 "etapa": "Etapa",
                 "variante": "Variante",
                 "followups": "Follow-ups",

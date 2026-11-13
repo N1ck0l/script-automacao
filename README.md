@@ -10,19 +10,21 @@ banimento de chip pela Meta.
 
 | Arquivo | Descrição |
 |---|---|
-| `prospeccao_whatsapp.py` | Script principal de envio (somente stdlib; Selenium opcional) |
+| `prospeccao_whatsapp.py` | Script principal de envio e orquestração (stdlib; Selenium opcional) |
+| `prospeccao/` | Módulos internos (`config.py`, `telefones.py`, `calendario.py`, `trava.py`, `classificador.py`, `metricas.py`) |
 | `mensagens.json` | Textos da abordagem e do follow-up (spintax + tokens) — edite aqui, não no código. Inclui `demonstracao`: `pdf` (anexado na 2ª etapa) e `html` (URL da demo interativa, enviada junto quando preenchida) |
+| `config.example.json` | Modelo de configuração regional (`cidade_padrao`, `feriados_locais`) — copie para `config.local.json` para personalizar |
 | `minerador_maps.py` | Minerador de empresas no Google Maps (Playwright) → `prospeccao.csv` |
-| `prospeccao.csv` | Contatos (`clinica,bairro,cidade,telefone,site,avaliacoes,segmento,status,resposta,atualizado_em,ultimo_envio,followups`) — `segmento` = `odonto`\|`medico` |
+| `prospeccao.example.csv` | Modelo de cabeçalho do CSV de contatos (o `prospeccao.csv` real fica fora do Git) |
 | `dashboard.py` | Dashboard Streamlit do `prospeccao.csv` (KPIs, gráficos, filtros e tabela com links) |
-| `test_prospeccao.py` + `test_minerador.py` | 159 testes do núcleo anti-ban, do modo automático, da mineração e do `segmento` (unittest, zero dependências) |
+| `test_prospeccao.py` + `test_minerador.py` + `test_dashboard.py` | 175 testes do núcleo anti-ban, modo automático, mineração e métricas do dashboard |
 | `index.html` | Demonstração interativa para enviar ao cliente (é a página do GitHub Pages): simulação da triagem no WhatsApp + comparação NF-e + CTA |
 | `demonstracao.pdf` | Resumo de 1 página da demonstração (print da simulação + CTA) — anexado automaticamente na 2ª etapa (apresentação/resumo), quando a clínica responde; gerado pelo `gerar_demo_pdf.py` |
 | `gerar_demo_pdf.py` | Regenera `demonstracao.pdf` a partir do `index.html` (requer `reportlab` + Playwright) |
 | `logs/` | Log diário do modo automático (`automatico_AAAA-MM-DD.log`) |
 | `termos_mineracao.txt` | Termos do rodízio semanal do minerador |
-| `historico_envios.jsonl` | Auditoria: todo envio confirmado é registrado aqui |
-| `requirements.txt` | `playwright`, `selenium` (opcional) |
+| `historico_envios.jsonl` | Auditoria local: todo envio confirmado é registrado aqui (fora do Git) |
+| `requirements.txt` | `playwright`, `selenium`, `streamlit`, `pandas`, `plotly`, `reportlab` |
 
 ## Como rodar
 
@@ -325,6 +327,8 @@ voltar: `Enable-ScheduledTask -TaskName "Prospeccao WhatsApp"`.
 Se o log disser **"WhatsApp Web desconectado"**, rode
 `python prospeccao_whatsapp.py --conectar` e escaneie o QR Code no Chrome que
 abrir (WhatsApp > Aparelhos conectados). Ele fecha sozinho quando conectar.
+Para testar se a sessão e os seletores do WhatsApp Web continuam funcionando
+sem enviar nenhuma mensagem, rode `python prospeccao_whatsapp.py --healthcheck`.
 
 **Janela do Chrome**: nos envios e na leitura das conversas o Chrome do script
 abre **fora da tela**, sem saltar na frente do que você está fazendo (não a
