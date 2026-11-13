@@ -16,9 +16,9 @@ banimento de chip pela Meta.
 | `prospeccao.csv` | Contatos (`clinica,bairro,cidade,telefone,site,avaliacoes,segmento,status,resposta,atualizado_em,ultimo_envio,followups`) — `segmento` = `odonto`\|`medico` |
 | `dashboard.py` | Dashboard Streamlit do `prospeccao.csv` (KPIs, gráficos, filtros e tabela com links) |
 | `test_prospeccao.py` + `test_minerador.py` | 159 testes do núcleo anti-ban, do modo automático, da mineração e do `segmento` (unittest, zero dependências) |
-| `demonstracao.html` | Demonstração interativa para enviar ao cliente: simulação da triagem no WhatsApp + comparação NF-e (abra direto no navegador; hospede no GitHub Pages para obter o link) |
+| `index.html` | Demonstração interativa para enviar ao cliente (é a página do GitHub Pages): simulação da triagem no WhatsApp + comparação NF-e + CTA |
 | `demonstracao.pdf` | Resumo de 1 página da demonstração (print da simulação + CTA) — anexado automaticamente na 2ª etapa (apresentação/resumo), quando a clínica responde; gerado pelo `gerar_demo_pdf.py` |
-| `gerar_demo_pdf.py` | Regenera `demonstracao.pdf` a partir do `demonstracao.html` (requer `reportlab` + Playwright) |
+| `gerar_demo_pdf.py` | Regenera `demonstracao.pdf` a partir do `index.html` (requer `reportlab` + Playwright) |
 | `logs/` | Log diário do modo automático (`automatico_AAAA-MM-DD.log`) |
 | `termos_mineracao.txt` | Termos do rodízio semanal do minerador |
 | `historico_envios.jsonl` | Auditoria: todo envio confirmado é registrado aqui |

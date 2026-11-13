@@ -1,4 +1,4 @@
-# Gera demonstracao.pdf (1 página) a partir da simulação em demonstracao.html.
+# Gera demonstracao.pdf (1 página) a partir da simulação em index.html.
 import tempfile
 from pathlib import Path
 
@@ -12,7 +12,7 @@ from reportlab.pdfgen import canvas
 from reportlab.platypus import Paragraph, Table, TableStyle
 
 BASE = Path(__file__).resolve().parent
-HTML = BASE / "demonstracao.html"
+HTML = BASE / "index.html"
 SAIDA = BASE / "demonstracao.pdf"
 
 AZUL = colors.HexColor("#123a6b")
@@ -36,7 +36,11 @@ def capturar_celular() -> Path:
         navegador = p.chromium.launch()
         pagina = navegador.new_page(viewport={"width": 1280, "height": 900})
         pagina.goto(HTML.resolve().as_uri())
-        pagina.wait_for_timeout(26000)
+        # A animação do chat só começa quando #conversa entra na tela
+        # (IntersectionObserver); sem este scroll o celular ficava vazio.
+        pagina.locator("#conversa").scroll_into_view_if_needed()
+        # Espera determinística: #painelResumo perde "escondido" no fim da animação.
+        pagina.wait_for_selector("#painelResumo:not(.escondido)", timeout=45000)
         pagina.evaluate("document.getElementById('conversa').scrollTop = 0")
         pagina.wait_for_timeout(300)
         pagina.locator(".celular").screenshot(path=str(destino))
