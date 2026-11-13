@@ -1224,6 +1224,20 @@
     roiAnimState[rafKey] = requestAnimationFrame(passo);
   }
 
+  function atualizarLinkWhatsApp(horas, receita) {
+    var btnWa = document.querySelector(".btn-whatsapp");
+    if (!btnWa) return;
+    var partes = ["Olá Nickolas,"];
+    if (clinicaParam) {
+      partes.push("sou da " + clinicaParam + " e");
+    }
+    partes.push("gostaria de agendar uma demonstração das automações para nossa clínica");
+    if (typeof horas === "number" && typeof receita === "number") {
+      partes.push("(simulei ~" + horas + " h/mês economizadas e R$ " + receita.toLocaleString("pt-BR") + "/mês recuperados na calculadora)");
+    }
+    btnWa.href = "https://wa.me/5579981677954?text=" + encodeURIComponent(partes.join(" ") + ".");
+  }
+
   function atualizarRoi() {
     if (!rMsgs || !rFaltas || !rTicket) return;
     var msgs = Number(rMsgs.value);
@@ -1236,6 +1250,7 @@
     document.getElementById("roiTicketVal").textContent = "R$ " + ticket;
     animarNumero(document.getElementById("roiHoras"), "horas", horas, function (v) { return "~" + v + " h/mês"; });
     animarNumero(document.getElementById("roiReceita"), "receita", receita, function (v) { return "R$ " + v.toLocaleString("pt-BR") + "/mês"; });
+    atualizarLinkWhatsApp(horas, receita);
   }
   [rMsgs, rFaltas, rTicket].forEach(function (el) {
     if (el) el.addEventListener("input", atualizarRoi);

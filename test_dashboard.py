@@ -193,6 +193,32 @@ class TestMelhoriasNucleo(unittest.TestCase):
             "sem interesse",
         )
 
+    def test_notificar_telegram_ignora_sem_config_e_envia_com_config(self):
+        from unittest.mock import MagicMock, patch
+        from prospeccao.notificacoes import eh_lead_quente, notificar_telegram
+
+        self.assertFalse(notificar_telegram("Teste", "Corpo", {}))
+        self.assertTrue(eh_lead_quente("INTERESSE"))
+        self.assertFalse(eh_lead_quente("RECUSA"))
+
+        resp_mock = MagicMock()
+        resp_mock.status = 200
+        cm_mock = MagicMock()
+        cm_mock.__enter__.return_value = resp_mock
+        with patch("urllib.request.urlopen", return_value=cm_mock) as mock_open:
+            ok = notificar_telegram(
+                "Lead respondeu",
+                "• Clínica X: Gostaria de saber mais",
+                {"telegram_bot_token": "123:ABC", "telegram_chat_id": "999"},
+            )
+            self.assertTrue(ok)
+            self.assertEqual(mock_open.call_count, 1)
+
+    def test_index_html_atualiza_link_whatsapp_com_roi(self):
+        html = (Path(__file__).resolve().parent / "index.html").read_text(encoding="utf-8")
+        self.assertIn("atualizarLinkWhatsApp", html)
+        self.assertIn("simulei ~", html)
+
 
 if __name__ == "__main__":
     unittest.main()

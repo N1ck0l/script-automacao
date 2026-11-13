@@ -14,6 +14,9 @@ CONFIG_PADRAO: dict = {
         [3, 17],  # Aniversário de Aracaju
         [12, 8],  # N. Sra. da Conceição
     ],
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "telegram_categorias": ["INTERESSE", "DUVIDA"],
 }
 
 

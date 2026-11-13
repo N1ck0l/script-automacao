@@ -69,6 +69,7 @@ from prospeccao.classificador import (  # noqa: F401
     texto_confere,
 )
 from prospeccao.config import carregar_config
+from prospeccao.notificacoes import notificar_telegram
 from prospeccao.telefones import (  # noqa: F401
     _escore_sinais,
     _sem_acentos,
@@ -1880,6 +1881,12 @@ def avisar_respostas(relatorio: dict, sessao: "SessaoWeb", destino: str | None) 
     texto = "\n".join(linhas)
     if destino:
         sessao.enviar(_resumo_contato(destino), texto, permitir_reenvio=True, confirmar=False)
+    if respostas:
+        detalhes = "\n".join(
+            f"• {nome}: “{msg}”" if msg else f"• {nome}"
+            for nome, msg in respostas
+        )
+        notificar_telegram("📩 Lead respondeu no WhatsApp", detalhes, carregar_config())
     notificar_windows("Prospecção: clínica respondeu",
                       ", ".join([n for n, _ in respostas] + optouts))
 
