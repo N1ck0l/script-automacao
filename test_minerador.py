@@ -93,6 +93,18 @@ class TestPrepararRegistro(unittest.TestCase):
         self.assertEqual(reg["status"], "pendente")
         self.assertEqual(reg["cidade"], "Aracaju")
         self.assertEqual(list(reg.keys()), pw.COLUNAS)  # esquema do envio
+        self.assertEqual(reg["segmento"], "odonto")  # inferido do nome
+
+    def test_segmento_vem_do_termo_de_busca(self):
+        reg = mm.preparar_novo_registro(
+            {"clinica": "Clínica Genérica", "telefone": "(79) 99963-1871"},
+            segmento=pw.inferir_segmento("clinica medica em Aracaju SE"))
+        self.assertEqual(reg["segmento"], "medico")
+
+    def test_segmento_sem_sinal_fica_vazio(self):
+        reg = mm.preparar_novo_registro(
+            {"clinica": "Clínica X", "telefone": "(79) 99963-1871"})
+        self.assertEqual(reg["segmento"], "")
 
     def test_rejeita_telefone_invalido(self):
         reg = mm.preparar_novo_registro({"clinica": "Clínica X",

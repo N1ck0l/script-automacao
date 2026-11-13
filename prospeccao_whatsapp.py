@@ -41,7 +41,7 @@ import random
 import re
 import sys
 import time
-import webbrowser
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -57,13 +57,30 @@ ARQUIVO_LOG = BASE_DIR / "historico_envios.jsonl"
 ARQUIVO_MENSAGENS = BASE_DIR / "mensagens.json"
 PERFIL_SELENIUM = BASE_DIR / ".perfil_whatsapp_web"
 
+# Por padrão o Chrome do script abre FORA DA TELA (não salta na frente do que
+# você está fazendo, nem nos envios nem na leitura das conversas). Fica visível
+# só com --conectar (para escanear o QR Code) ou --mostrar-janela.
+JANELA_VISIVEL = False
+
+
+def opcoes_janela(visivel: bool) -> list[str]:
+    """Argumentos de posição/tamanho da janela do Chrome."""
+    if visivel:
+        return ["--start-maximized"]
+    # Tamanho normal (o WhatsApp Web precisa do layout de desktop), mas fora da
+    # área visível de qualquer monitor.
+    return ["--window-size=1366,900", "--window-position=-32000,-32000"]
+
 COLUNAS = ["clinica", "bairro", "cidade", "telefone", "site", "avaliacoes",
-           "status", "resposta", "atualizado_em", "ultimo_envio", "followups",
-           "variante", "etapa", "menu", "versao_textos"]
+           "segmento", "status", "resposta", "atualizado_em", "ultimo_envio",
+           "followups", "variante", "etapa", "menu", "versao_textos"]
+# segmento: "odonto" | "medico" — inferido na mineração (nome/termo de busca);
+#        filtro --segmento no envio; vazio = não classificado
 # variante: teste A/B ("curta" | "completa")
 # etapa: "abertura" (curta enviada) | "apresentacao" (texto completo enviado)
 #        | "resumo" (resumo enviado depois que a pessoa respondeu à completa)
 #        | "recusou" (respondeu com uma negativa: nada automático, o operador decide)
+#        | "despedida" (pediu para não ser contatado e recebeu o agradecimento final)
 # versao_textos: "versao" do mensagens.json usada no 1º envio (o A/B compara
 #        só contatos da versão atual; vazio = textos antigos)
 # menu: "respondido" quando o script já escolheu "falar com atendente" no robô
@@ -77,6 +94,9 @@ NAO_CONTATAR = "nao_contatar"  # opt-out: nunca volta à fila (nem com --reset)
 
 # Respostas que ainda admitem follow-up
 RESPOSTAS_EM_ABERTO = {"", "aguardando", "sem resposta", "resposta automatica"}
+
+# Segmentos de clínica (coluna "segmento"; filtro --segmento)
+SEGMENTOS = ("odonto", "medico")
 
 # Tipos de envio
 INICIAL = "inicial"
@@ -114,6 +134,51 @@ def validar_telefone(digitos: str) -> bool:
 def eh_celular(digitos: str) -> bool:
     """Celular = 55 + DDD + 9 + 8 dígitos. Fixos raramente têm WhatsApp."""
     return bool(re.fullmatch(r"55\d{2}9\d{8}", digitos))
+
+
+_SINAIS_ODONTO = (
+    "odontolog", "odont", "dentista", "dental", "dente", "ortodont",
+    "orthos", "implante dent", "implantodont", "endodont", "periodont",
+    "protese", "clareamento", "aparelho", "oral", "siso", "sorriso",
+    "sorrir", "sorria", "sorridents",
+)
+_SINAIS_MEDICO = (
+    "medic", "consultori", "consultorio", "hospital", "maternidade",
+    "fisioterapia", "dermatolog", "psicolog", "pediatr", "oftalmolog",
+    "nutri", "saude", "laborat", "diagnostico", "exame", "endoscop",
+    "ultrassom", "ginecolog", "cardio", "onco", "psiquiatr", "ortoped",
+    "traumato", "urolog", "neurolog", "gastro", "endocrino",
+    "fonoaudiolog", "cirurgia", "ambulatorio", "medicina",
+)
+
+
+def _sem_acentos(texto: str) -> str:
+    decomposto = unicodedata.normalize("NFD", texto)
+    return "".join(c for c in decomposto if unicodedata.category(c) != "Mn")
+
+
+def _escore_sinais(sinais: tuple[str, ...], baixo: str) -> int:
+    """Quantos sinais batem; subpalavras de outro sinal casado não contam
+    (evita "odont" somar junto de "odontolog")."""
+    casados = [s for s in sinais if s in baixo]
+    return sum(1 for s in casados
+               if not any(s != outro and s in outro for outro in casados))
+
+
+def inferir_segmento(texto: str) -> str:
+    """Classifica o texto (nome da clínica ou termo de busca).
+
+    Conta os sinais de cada segmento e vence o de maior escore (empate:
+    odonto). Retorna "" quando não há nenhum sinal.
+    """
+    baixo = _sem_acentos(texto or "").lower()
+    if not baixo:
+        return ""
+    odonto = _escore_sinais(_SINAIS_ODONTO, baixo)
+    medico = _escore_sinais(_SINAIS_MEDICO, baixo)
+    if odonto == 0 and medico == 0:
+        return ""
+    return "odonto" if odonto >= medico else "medico"
 
 
 def _inteiro(valor) -> int:
@@ -189,6 +254,7 @@ def carregar_planilha(caminho: Path) -> Planilha:
             registro["telefone"] = telefone
             registro["status"] = registro["status"].lower() or PENDENTE
             registro["resposta"] = registro["resposta"].lower()
+            registro["segmento"] = registro["segmento"].lower()
             registro["cidade"] = registro["cidade"] or CIDADE_PADRAO
             planilha.contatos.append(registro)
 
@@ -219,7 +285,7 @@ def salvar_contatos(caminho: Path, contatos: list[dict],
 
 CHAVES_MENSAGENS = ["saudacoes", "ganchos", "autoridades", "cases", "ctas",
                     "estruturas", "followups", "aberturas", "estruturas_apresentacao",
-                    "ctas_apresentacao", "estruturas_resumo"]
+                    "ctas_apresentacao", "estruturas_resumo", "despedidas"]
 _CACHE_MENSAGENS: dict[Path, dict] = {}
 
 
@@ -408,7 +474,8 @@ def montar_apresentacao(contato: dict, mensagens: dict | None = None,
     contexto = _contexto(contato, m, agora)
     contexto.update(case=random.choice(m["cases"]),
                     cta_apresentacao=random.choice(m["ctas_apresentacao"]))
-    return resolver_spintax(random.choice(m["estruturas_apresentacao"]), contexto)
+    return _com_link_demonstracao(
+        resolver_spintax(random.choice(m["estruturas_apresentacao"]), contexto), m)
 
 
 def montar_resumo_completa(contato: dict, mensagens: dict | None = None,
@@ -416,16 +483,48 @@ def montar_resumo_completa(contato: dict, mensagens: dict | None = None,
     """2ª etapa da variante completa: o resumo prometido no CTA ("te mando um
     resumo de 1 minuto"), enviado quando uma pessoa responde."""
     m = mensagens or carregar_mensagens()
-    return resolver_spintax(random.choice(m["estruturas_resumo"]),
-                            _contexto(contato, m, agora))
+    return _com_link_demonstracao(
+        resolver_spintax(random.choice(m["estruturas_resumo"]),
+                         _contexto(contato, m, agora)), m)
+
+
+def montar_despedida(contato: dict, mensagens: dict | None = None,
+                      agora: datetime | None = None) -> str:
+    """Agradecimento final, formal, para quem disse que não tem interesse."""
+    m = mensagens or carregar_mensagens()
+    return resolver_spintax(random.choice(m["despedidas"]), _contexto(contato, m, agora))
 
 
 def montar_texto_followup(contato: dict, mensagens: dict | None = None,
-                          agora: datetime | None = None) -> str:
+                           agora: datetime | None = None) -> str:
     """Mensagem curta de retomada para quem não respondeu."""
     m = mensagens or carregar_mensagens()
     return resolver_spintax(random.choice(m["followups"]),
                             _contexto(contato, m, agora))
+
+
+def demonstracao_html(mensagens: dict | None = None) -> str:
+    """URL da demonstração interativa ('' = não enviar o link)."""
+    m = mensagens or carregar_mensagens()
+    return str((m.get("demonstracao") or {}).get("html") or "").strip()
+
+
+def demonstracao_pdf(mensagens: dict | None = None) -> Path | None:
+    """Caminho do PDF anexado na 2ª etapa (None = sem anexo)."""
+    m = mensagens or carregar_mensagens()
+    nome = str((m.get("demonstracao") or {}).get("pdf") or "").strip()
+    if not nome:
+        return None
+    caminho = Path(nome)
+    if not caminho.is_absolute():
+        caminho = Path(__file__).resolve().parent / caminho
+    return caminho if caminho.is_file() else None
+
+
+def _com_link_demonstracao(texto: str, mensagens: dict) -> str:
+    """Acrescenta o link da demonstração quando hospedado (html preenchido)."""
+    url = demonstracao_html(mensagens)
+    return f"{texto}\n\nDemonstração interativa: {url}" if url else texto
 
 
 def montar_link(contato: dict, mensagem: str) -> str:
@@ -457,7 +556,7 @@ def ler_historico() -> list[dict]:
 # das 10h30 esgotaria a cota e a resposta a quem falou com a gente ficaria
 # adiada dia após dia. A 2ª etapa tem um teto próprio (segundas_etapas_hoje).
 SEGUNDAS_ETAPAS = {"apresentacao", "resumo"}
-TIPOS_FORA_DO_LIMITE = {"menu"} | SEGUNDAS_ETAPAS
+TIPOS_FORA_DO_LIMITE = {"menu", "despedida"} | SEGUNDAS_ETAPAS
 
 
 def envios_hoje() -> int:
@@ -823,8 +922,9 @@ class SessaoWeb:
                 self._trava = trava
             from selenium import webdriver
             opcoes = webdriver.ChromeOptions()
-            opcoes.add_argument("--start-maximized")
-            # A janela pode ficar minimizada/atrás de outras: sem isto o Chrome
+            for flag in opcoes_janela(JANELA_VISIVEL):
+                opcoes.add_argument(flag)
+            # A janela fica fora da tela/atrás de outras: sem isto o Chrome
             # desacelera a aba e a conferência de entrega fica lenta/inconclusiva.
             for flag in ("--disable-background-timer-throttling",
                          "--disable-backgrounding-occluded-windows",
@@ -1057,6 +1157,77 @@ class SessaoWeb:
         except Exception:  # noqa: BLE001
             print("[AVISO] Não consegui limpar o rascunho — apague-o no WhatsApp Web.")
 
+    def enviar_arquivo(self, caminho) -> bool:
+        """Anexa um arquivo (ex.: demonstracao.pdf) na conversa aberta.
+
+        Melhor esforço: a mensagem de texto já foi enviada antes — falha aqui
+        só avisa o operador para anexar manualmente; nunca desfaz nem reenvia.
+        """
+        if self.driver is None:
+            return False
+        caminho = Path(caminho)
+        if not caminho.is_file():
+            print(f"[AVISO] Demonstração não encontrada: {caminho.name}")
+            return False
+        try:
+            from selenium.webdriver.common.by import By
+            driver = self.driver
+            botoes = [b for b in driver.find_elements(
+                By.CSS_SELECTOR,
+                'div[title="Anexar"], div[title="Attach"], span[data-icon="plus"], '
+                'span[data-icon="clip"]') if b.is_displayed()]
+            if not botoes:
+                print("[AVISO] Botão de anexo não encontrado — anexe o PDF "
+                      "manualmente no WhatsApp Web.")
+                return False
+            botoes[0].click()
+            time.sleep(1.0)
+            alvo = None
+            for item in driver.find_elements(
+                    By.CSS_SELECTOR, '[role="menuitem"], [role="button"]'):
+                rotulo = (item.get_attribute("innerText") or "").strip().lower()
+                if "document" in rotulo or item.find_elements(
+                        By.CSS_SELECTOR, 'span[data-icon="document"]'):
+                    alvo = item
+                    break
+            if alvo is None:
+                print("[AVISO] Opção 'Documento' não encontrada — anexe o PDF "
+                      "manualmente no WhatsApp Web.")
+                return False
+            alvo.click()
+            entradas = driver.find_elements(By.CSS_SELECTOR, 'input[type="file"]')
+            if not entradas:
+                print("[AVISO] Seletor de arquivo não encontrado — anexe o PDF "
+                      "manualmente no WhatsApp Web.")
+                return False
+            try:
+                entradas[0].send_keys(str(caminho.resolve()))
+            except Exception:  # noqa: BLE001 - input oculto em algumas versões
+                driver.execute_script("arguments[0].style.display='block';",
+                                      entradas[0])
+                entradas[0].send_keys(str(caminho.resolve()))
+            # tela de conferência do documento: espera o botão de envio visível
+            botao_envio = None
+            for _ in range(40):  # até ~20s
+                time.sleep(0.5)
+                visiveis = [b for b in driver.find_elements(
+                    By.CSS_SELECTOR, 'span[data-icon="send"]') if b.is_displayed()]
+                if visiveis:
+                    botao_envio = visiveis[0]
+                    break
+            if botao_envio is None:
+                print("[AVISO] Documento selecionado, mas a tela de envio não "
+                      "abriu — confira no WhatsApp Web e envie manualmente.")
+                return False
+            botao_envio.click()
+            time.sleep(4)
+            print(f"[OK] {caminho.name} anexado na conversa.")
+            return True
+        except Exception as exc:  # noqa: BLE001 - seletores da Meta mudam
+            print(f"[AVISO] Falha ao anexar {caminho.name} ({exc}) — anexe o "
+                  "PDF manualmente no WhatsApp Web.")
+            return False
+
     def fechar(self) -> None:
         if self.driver is not None:
             try:
@@ -1075,13 +1246,13 @@ class SessaoWeb:
 
 def exibir_contatos(contatos: list[dict]) -> None:
     print(f"\n{'#':>3} | {'CLÍNICA':<28} | {'BAIRRO':<14} | {'TELEFONE':<15} | "
-          f"{'STATUS':<12} | RESPOSTA")
-    print("-" * 104)
+          f"{'SEG':<6} | {'STATUS':<12} | RESPOSTA")
+    print("-" * 113)
     for i, c in enumerate(contatos, start=1):
         fixo = "" if eh_celular(c["telefone"]) else " (fixo)"
         print(f"{i:>3} | {c['clinica'][:28]:<28} | {c['bairro'][:14]:<14} | "
-              f"{c['telefone']:<15} | {c['status']:<12} | "
-              f"{c.get('resposta') or '-'}{fixo}")
+              f"{c['telefone']:<15} | {(c.get('segmento') or '-'):<6} | "
+              f"{c['status']:<12} | {c.get('resposta') or '-'}{fixo}")
 
 
 def gerenciar_respostas(contatos: list[dict], planilha: Planilha) -> None:
@@ -1316,7 +1487,7 @@ NOMES_GENERICOS = {
 
 LIMITES_TAMANHO = {"completa": (200, 1500), "curta": (80, 400),
                    "apresentacao": (150, 1300), "resumo": (150, 1300),
-                   "followup": (60, 500)}
+                   "followup": (60, 500), "despedida": (60, 400)}
 
 
 def validar_mensagem(mensagem: str, contato: dict, tipo: str = "completa") -> str | None:
@@ -1677,6 +1848,8 @@ def verificar_conversas(planilha: Planilha, sessao: "SessaoWeb",
                 if resposta == "sem interesse":
                     contato["status"] = NAO_CONTATAR
                     relatorio["optouts"].append(nome)
+                    if contato.get("etapa") != "despedida":
+                        relatorio["acoes"].append(("despedida", tel, None))
                 elif resposta == "respondeu":
                     relatorio["respostas"].append(nome)
                     desde_min = desde.replace(second=0, microsecond=0)
@@ -1807,6 +1980,7 @@ def executar_acoes(relatorio: dict, planilha: Planilha, sessao: "SessaoWeb",
 
     - "apresentacao": pessoa respondeu à abertura curta -> envia o texto completo;
     - "resumo": pessoa respondeu à mensagem completa -> envia o resumo prometido;
+    - "despedida": pessoa disse que não tem interesse -> agradece, formal (uma vez);
     - "menu": robô com menu -> escolhe "falar com atendente" (uma vez por clínica).
     """
     feitos: list[str] = []
@@ -1829,6 +2003,14 @@ def executar_acoes(relatorio: dict, planilha: Planilha, sessao: "SessaoWeb",
             if problema:
                 _registrar(f"[PULADO] {rotulo} para {nome}: {problema}")
                 continue
+        elif tipo == "despedida":
+            if contato.get("etapa") == "despedida":
+                continue
+            mensagem = montar_despedida(contato, mensagens)
+            problema = validar_mensagem(mensagem, contato, "despedida")
+            if problema:
+                _registrar(f"[PULADO] despedida para {nome}: {problema}")
+                continue
         else:
             mensagem = str(dado)
         restante = segundos_de_espera(ultimo_envio(),
@@ -1848,6 +2030,17 @@ def executar_acoes(relatorio: dict, planilha: Planilha, sessao: "SessaoWeb",
             contato["etapa"] = tipo
             feitos.append(f"{'apresentação enviada' if tipo == 'apresentacao' else 'resumo enviado'}"
                           f" para {nome}")
+            pdf = demonstracao_pdf(mensagens)
+            if pdf is not None:
+                if sessao.enviar_arquivo(pdf):
+                    _registrar(f"[AÇÃO] {pdf.name} anexado para {nome}")
+                else:
+                    _registrar(f"[AVISO] {pdf.name} não anexado para {nome} — "
+                               "anexe manualmente")
+        elif tipo == "despedida":
+            contato["etapa"] = "despedida"  # status continua nao_contatar
+            contato["atualizado_em"] = datetime.now().isoformat(timespec="seconds")
+            feitos.append(f"agradecimento final enviado para {nome} (sem interesse)")
         else:
             contato["menu"] = "respondido"
             feitos.append(f"opção {mensagem} (falar com atendente) escolhida no robô de {nome}")
@@ -2167,6 +2360,9 @@ def _criar_parser() -> argparse.ArgumentParser:
     parser.add_argument("--clinica", "--status", dest="clinica", default=None,
                         help="Filtra pelo nome da clínica (substring, ex.: 'Ferraz'). "
                              "--status é um alias antigo.")
+    parser.add_argument("--segmento", choices=list(SEGMENTOS), default=None,
+                        help="Filtra a fila pelo segmento do CSV: odonto | medico "
+                             "(contatos sem segmento ficam de fora)")
     parser.add_argument("--automatico", action="store_true",
                         help="Envio SEM operador (para o agendador): pendentes com "
                              "celular até --limite-dia, com todas as checagens")
@@ -2184,7 +2380,11 @@ def _criar_parser() -> argparse.ArgumentParser:
                              "na hora, envia a apresentação da variante curta e responde "
                              "menus de robô")
     parser.add_argument("--conectar", action="store_true",
-                        help="Abre o WhatsApp Web do script para escanear o QR Code")
+                        help="Abre o WhatsApp Web do script para escanear o QR Code "
+                             "(janela visível)")
+    parser.add_argument("--mostrar-janela", action="store_true",
+                        help="Mostra a janela do Chrome (padrão: abre fora da tela, "
+                             "sem saltar na frente do que você está fazendo)")
     parser.add_argument("--reset", action="store_true",
                         help="Reabre como 'pendente' quem recebeu e não respondeu "
                              "(nunca reabre opt-out nem quem respondeu)")
@@ -2194,6 +2394,9 @@ def _criar_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = _criar_parser()
     args = parser.parse_args()
+
+    global JANELA_VISIVEL
+    JANELA_VISIVEL = bool(args.mostrar_janela or args.conectar)
 
     if args.preview:
         args.modo = "preview"
@@ -2272,6 +2475,14 @@ def main() -> None:
         contatos = [c for c in contatos if filtro in c["clinica"].lower()]
         if not contatos:
             print(f"[ERRO] Nenhum contato corresponde a '{args.clinica}'.")
+            sys.exit(1)
+
+    if args.segmento:
+        contatos = [c for c in contatos
+                    if c.get("segmento", "").lower() == args.segmento]
+        if not contatos:
+            print(f"[ERRO] Nenhum contato com segmento '{args.segmento}'. "
+                  "Classifique o CSV (coluna segmento) ou use outro filtro.")
             sys.exit(1)
 
     if args.respostas:

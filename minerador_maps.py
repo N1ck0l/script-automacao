@@ -152,13 +152,16 @@ def extrair_avaliacoes(texto: str) -> str:
     return ""
 
 
-def preparar_novo_registro(dados: dict, cidade: str = CIDADE_PADRAO) -> dict | None:
+def preparar_novo_registro(dados: dict, cidade: str = CIDADE_PADRAO,
+                           segmento: str = "") -> dict | None:
     """Converte um resultado bruto no registro do CSV; None se inválido.
 
     Telefones fixos são aceitos aqui; o filtro de celular fica em `minerar`.
 
     Regras: telefone obrigatório e válido (DDI 55 + DDD + número), nome
     obrigatório. `status` nasce como "pendente" conforme o fluxo de envio.
+    `segmento` (odonto/medico) vem do termo de busca; sem termo, infere do
+    nome da clínica.
     """
     clinica = (dados.get("clinica") or "").strip()
     telefone = pw.normalizar_telefone(dados.get("telefone") or "")
@@ -174,6 +177,7 @@ def preparar_novo_registro(dados: dict, cidade: str = CIDADE_PADRAO) -> dict | N
         telefone=telefone,
         site=(dados.get("site") or "").strip(),
         avaliacoes=(dados.get("avaliacoes") or "").strip(),
+        segmento=(segmento or pw.inferir_segmento(clinica)).lower(),
         status=pw.PENDENTE,
     )
     return registro
@@ -397,6 +401,7 @@ def minerar(termo: str, max_alvos: int = 40, cidade: str = CIDADE_PADRAO,
         sys.exit(1)
 
     print(f"[BUSCA] {termo} | alvo: até {max_alvos} estabelecimentos")
+    segmento = pw.inferir_segmento(termo)
 
     with sync_playwright() as p:
         navegador = p.chromium.launch(
@@ -432,7 +437,8 @@ def minerar(termo: str, max_alvos: int = 40, cidade: str = CIDADE_PADRAO,
                     print("         ↳ pulado: não foi possível extrair o card")
                     continue
 
-                registro = preparar_novo_registro(dados, cidade)
+                registro = preparar_novo_registro(dados, cidade,
+                                                  segmento=segmento)
                 if registro is None:
                     print(f"         ↳ pulado: telefone ausente/inválido "
                           f"({dados.get('telefone') or 'sem número'})")

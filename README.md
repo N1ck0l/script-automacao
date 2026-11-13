@@ -11,10 +11,14 @@ banimento de chip pela Meta.
 | Arquivo | Descrição |
 |---|---|
 | `prospeccao_whatsapp.py` | Script principal de envio (somente stdlib; Selenium opcional) |
-| `mensagens.json` | Textos da abordagem e do follow-up (spintax + tokens) — edite aqui, não no código |
+| `mensagens.json` | Textos da abordagem e do follow-up (spintax + tokens) — edite aqui, não no código. Inclui `demonstracao`: `pdf` (anexado na 2ª etapa) e `html` (URL da demo interativa, enviada junto quando preenchida) |
 | `minerador_maps.py` | Minerador de empresas no Google Maps (Playwright) → `prospeccao.csv` |
-| `prospeccao.csv` | Contatos (`clinica,bairro,cidade,telefone,site,avaliacoes,status,resposta,atualizado_em,ultimo_envio,followups`) |
-| `test_prospeccao.py` + `test_minerador.py` | 139 testes do núcleo anti-ban, do modo automático e da mineração (unittest, zero dependências) |
+| `prospeccao.csv` | Contatos (`clinica,bairro,cidade,telefone,site,avaliacoes,segmento,status,resposta,atualizado_em,ultimo_envio,followups`) — `segmento` = `odonto`\|`medico` |
+| `dashboard.py` | Dashboard Streamlit do `prospeccao.csv` (KPIs, gráficos, filtros e tabela com links) |
+| `test_prospeccao.py` + `test_minerador.py` | 159 testes do núcleo anti-ban, do modo automático, da mineração e do `segmento` (unittest, zero dependências) |
+| `demonstracao.html` | Demonstração interativa para enviar ao cliente: simulação da triagem no WhatsApp + comparação NF-e (abra direto no navegador; hospede no GitHub Pages para obter o link) |
+| `demonstracao.pdf` | Resumo de 1 página da demonstração (print da simulação + CTA) — anexado automaticamente na 2ª etapa (apresentação/resumo), quando a clínica responde; gerado pelo `gerar_demo_pdf.py` |
+| `gerar_demo_pdf.py` | Regenera `demonstracao.pdf` a partir do `demonstracao.html` (requer `reportlab` + Playwright) |
 | `logs/` | Log diário do modo automático (`automatico_AAAA-MM-DD.log`) |
 | `termos_mineracao.txt` | Termos do rodízio semanal do minerador |
 | `historico_envios.jsonl` | Auditoria: todo envio confirmado é registrado aqui |
@@ -42,6 +46,7 @@ python prospeccao_whatsapp.py --followup        # retoma quem não respondeu há
 
 # Outros comandos úteis
 python prospeccao_whatsapp.py --listar          # lista contatos + respostas
+python prospeccao_whatsapp.py --segmento odonto # só clínicas odontológicas (ou medico)
 python prospeccao_whatsapp.py --preview         # dry-run: só gera prévias
 python prospeccao_whatsapp.py --contato 3       # começa a fila pelo 3º contato
 python prospeccao_whatsapp.py --clinica ferraz  # filtra pelo nome da clínica
@@ -50,7 +55,11 @@ python prospeccao_whatsapp.py --reset           # reabre quem recebeu e não res
 python prospeccao_whatsapp.py --limite-dia 15 --hora-inicio 9 --hora-fim 18
 python prospeccao_whatsapp.py --followup --dias-followup 5 --max-followups 2
 
-# 5. Testes (biblioteca padrão, sem instalar nada)
+# 5. Dashboard — gráficos, filtros e tabela de contatos
+pip install streamlit pandas plotly
+streamlit run dashboard.py
+
+# 6. Testes (biblioteca padrão, sem instalar nada)
 python -m unittest discover -v
 ```
 
@@ -154,6 +163,28 @@ python prospeccao_whatsapp.py --followup    # retomada para quem não respondeu
 python prospeccao_whatsapp.py --listar      # vê a coluna RESPOSTA na tabela
 ```
 
+## Dashboard (`dashboard.py`)
+
+Visão gráfica do funil de prospecção — roda em `http://localhost:8501`:
+
+```bash
+pip install streamlit pandas plotly
+streamlit run dashboard.py
+```
+
+- **Filtros laterais**: busca por clínica/telefone, segmento
+  (`odonto`/`medico`), status, resposta, bairro e nota mínima do Google
+  (vale para todos os gráficos e a tabela);
+- **Visão geral**: KPIs (base, fila, enviados, respostas, taxa de resposta,
+  opt-outs), funil, envios por dia e lista de follow-ups pendentes (3+ dias
+  sem resposta);
+- **Análise**: status, respostas, top bairros, histograma de notas, etapas e
+  variantes de texto usadas;
+- **Contatos**: tabela com links diretos de WhatsApp (`wa.me`) e site, mais
+  download do CSV filtrado;
+- Os dados são relidos do `prospeccao.csv` a cada execução (use o botão
+  **Recarregar dados** após o minerador/atualizações).
+
 ## Modos de envio
 
 - `--modo manual` (padrão): abre o WhatsApp Web no navegador com o texto
@@ -187,8 +218,8 @@ Começa às **10h30** + um atraso sorteado de 0 a `--atraso-max` minutos (fora d
 pico da recepção, que é logo cedo).
 
 **Teste A/B** (coluna `variante`, fixa por número, metade para cada lado):
-- `curta`: uma pergunta fácil para a recepção responder ("o WhatsApp de
-  vocês costuma ficar muito cheio?") ou um pedido curto de permissão. Quando uma **pessoa** responde, o script envia sozinho a
+- `curta`: uma apresentação de duas linhas dizendo o que é oferecido e
+  pedindo permissão para enviar uma breve apresentação (tom sempre formal). Quando uma **pessoa** responde, o script envia sozinho a
   **apresentação** (`estruturas_apresentacao`) e a coluna `etapa` vira
   `apresentacao`;
 - `completa`: a mensagem completa, terminando com a oferta de um resumo e o
@@ -226,7 +257,9 @@ Agendado como **"Prospeccao Acompanhamento"** às 12h, 14h, 16h e 18h (dias
 - em robôs com menu, escolhe a opção **"falar com atendente"** (uma vez por
   clínica; não conta no limite diário);
 - marca `nao_contatar` quem pedir para não ser contatado (inclui "não é
-  relevante", "não precisamos");
+  relevante", "não precisamos", "não temos interesse") e responde **uma vez**,
+  de forma formal, com um agradecimento final (`despedidas` no
+  `mensagens.json`; `etapa` = `despedida`; não conta no limite diário);
 - resposta negativa sem ser opt-out ("Não", "Já temos", "No momento não"):
   você é avisado, mas o script **não** manda apresentação/resumo (`etapa` =
   `recusou`).
@@ -292,3 +325,8 @@ voltar: `Enable-ScheduledTask -TaskName "Prospeccao WhatsApp"`.
 Se o log disser **"WhatsApp Web desconectado"**, rode
 `python prospeccao_whatsapp.py --conectar` e escaneie o QR Code no Chrome que
 abrir (WhatsApp > Aparelhos conectados). Ele fecha sozinho quando conectar.
+
+**Janela do Chrome**: nos envios e na leitura das conversas o Chrome do script
+abre **fora da tela**, sem saltar na frente do que você está fazendo (não a
+feche pela barra de tarefas enquanto roda). Só fica visível com `--conectar`
+ou, se quiser acompanhar, com `--mostrar-janela`.

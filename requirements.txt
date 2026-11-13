@@ -11,3 +11,8 @@ selenium>=4.20
 # Os testes rodam com a biblioteca padrão:
 #   python3 -m unittest discover -v
 # pytest>=8.0
+
+# --- Opcional: dashboard (dashboard.py) ---
+streamlit>=1.50
+pandas>=2.2
+plotly>=5.20

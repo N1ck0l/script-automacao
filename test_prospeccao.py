@@ -81,6 +81,71 @@ class TestTelefone(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Segmento: inferência odonto/medico
+# ---------------------------------------------------------------------------
+
+class TestSegmento(BasePw):
+    def test_inferir_odonto(self):
+        for nome in ("Ferraz Odontologia | Dentista em Aracaju",
+                     "Dentista 24Horas - Dr Lucas Eduardo",
+                     "Clínica OrthoSim",
+                     "Lessa Oral Clinic",
+                     "dentista em Aracaju SE",
+                     "implante dentario em Aracaju SE"):
+            self.assertEqual(pw.inferir_segmento(nome), "odonto", nome)
+
+    def test_inferir_medico(self):
+        for nome in ("Centro Médico Siqueira Campos",
+                     "Grupo Santa Helena - Hospital e Maternidade",
+                     "Clínica Bem Viver - Exames - Ultrassom",
+                     "clinica medica em Aracaju SE",
+                     "clinica de psicologia em Aracaju SE"):
+            self.assertEqual(pw.inferir_segmento(nome), "medico", nome)
+
+    def test_sinal_sobreposto_nao_duplica_escore(self):
+        # "odont" está dentro de "odontolog": sem dedupe, o empate viraria
+        # odonto e CALE (exames+laboratório) seria classificada errado
+        self.assertEqual(
+            pw.inferir_segmento(
+                "Clínica CALE - Consultas | Exames | Laboratório | Odontologia"),
+            "medico")
+
+    def test_sem_sinal_retorna_vazio(self):
+        self.assertEqual(pw.inferir_segmento("Clínica X"), "")
+        self.assertEqual(pw.inferir_segmento(""), "")
+        self.assertEqual(pw.inferir_segmento(None), "")
+
+    def test_acentos_e_maiusculas_irrelevantes(self):
+        self.assertEqual(pw.inferir_segmento("CLÍNICA SAÚDE EM VIDA"),
+                         "medico")
+        self.assertEqual(pw.inferir_segmento("Odontologica São José"),
+                         "odonto")
+
+    def test_csv_com_segmento_e_filtro(self):
+        csv = self.tmpdir / "seg.csv"
+        csv.write_text(
+            ",".join(pw.COLUNAS) + "\n"
+            "Clínica Odonto,X,Aracaju,5579991111111,,,odonto,pendente,,,,,,,,\n"
+            "Clínica Médica,Y,Aracaju,5579992222222,,,medico,pendente,,,,,,,,\n"
+            "Clínica Sem Seg,Z,Aracaju,5579993333333,,,,pendente,,,,,,,,\n",
+            encoding="utf-8",
+        )
+        contatos = pw.carregar_contatos(csv)
+        self.assertEqual([c["segmento"] for c in contatos],
+                         ["odonto", "medico", ""])
+
+    def test_csv_antigo_sem_segmento_vira_vazio(self):
+        csv = self.tmpdir / "antigo.csv"
+        csv.write_text(
+            "clinica,bairro,cidade,telefone,status\n"
+            "Clínica A,Bairro X,Aracaju,5579991111111,pendente\n",
+            encoding="utf-8",
+        )
+        contatos = pw.carregar_contatos(csv)
+        self.assertEqual(contatos[0]["segmento"], "")
+
+
+# ---------------------------------------------------------------------------
 # Carga do CSV: deduplicação e validação
 # ---------------------------------------------------------------------------
 
@@ -564,6 +629,7 @@ class _SessaoFalsa:
     """Simula o WhatsApp Web: cada chamada consome um resultado do roteiro."""
     roteiro: list = []
     chamadas: list = []
+    anexos: list = []
 
     def __init__(self):
         self.ultimo_erro = None
@@ -575,6 +641,10 @@ class _SessaoFalsa:
         ok, erro, confirmado = _SessaoFalsa.roteiro.pop(0)
         self.ultimo_erro, self.confirmado = erro, confirmado
         return ok
+
+    def enviar_arquivo(self, caminho):
+        _SessaoFalsa.anexos.append(Path(caminho).name)
+        return True
 
     def fechar(self):
         pass
@@ -600,6 +670,7 @@ class TestModoAutomatico(BasePw):
              "TECNICO", "BLOQUEADO", "CANCELADO")})
         pw.SessaoWeb = falsa
         _SessaoFalsa.chamadas = []
+        _SessaoFalsa.anexos = []
         self.planilha = pw.Planilha(self.tmpdir / "prospeccao.csv")
         for i, nome in enumerate(["Clínica Alfa", "Clínica Beta", "Clínica Gama",
                                   "Clínica Delta"]):
@@ -864,6 +935,32 @@ class TestTextosAB(unittest.TestCase):
             self.assertTrue(any(__import__("re").search(p, t.lower())
                                 for p in pw.PADROES_OPTOUT), t)
 
+    def test_janela_do_chrome_fora_da_tela_por_padrao(self):
+        self.assertFalse(pw.JANELA_VISIVEL)
+        oculta = pw.opcoes_janela(False)
+        self.assertIn("--window-position=-32000,-32000", oculta)
+        self.assertNotIn("--start-maximized", oculta)
+        self.assertEqual(pw.opcoes_janela(True), ["--start-maximized"])
+        args = pw._criar_parser().parse_args(["--conectar"])
+        self.assertTrue(args.conectar and not args.mostrar_janela)
+
+    def test_despedida_formal_e_valida(self):
+        for contato in (self.COM_NOTA, self.SEM_NOTA):
+            for _ in range(20):
+                texto = pw.montar_despedida(contato)
+                self.assertIsNone(pw.validar_mensagem(texto, contato, "despedida"), texto)
+                self.assertNotIn("{", texto)
+
+    def test_tom_formal(self):
+        informais = ("rapidinh", "curtinh", "te mando", "te conto", "😊", " aí", "vlw", "blz")
+        for contato in (self.COM_NOTA, self.SEM_NOTA):
+            for _ in range(40):
+                for texto in (pw.montar_texto(contato), pw.montar_abertura(contato),
+                              pw.montar_texto_followup(contato), pw.montar_apresentacao(contato),
+                              pw.montar_resumo_completa(contato)):
+                    for termo in informais:
+                        self.assertNotIn(termo, texto.lower(), texto)
+
     def test_followup_nao_atribui_automacoes_a_clinica(self):
         for _ in range(40):
             self.assertNotIn("automações da ", pw.montar_texto_followup(self.COM_NOTA))
@@ -1006,6 +1103,25 @@ class TestAcoesEAvisos(TestModoAutomatico):
         self.assertIn("completa: 1/1", texto)
         self.assertIn("curta: 0/1", texto)
 
+    def test_despedida_para_quem_nao_tem_interesse(self):
+        c = self._contato_enviado(status="nao_contatar", resposta="sem interesse")
+        self.planilha.salvar()
+        _SessaoFalsa.roteiro = [(True, None, True)]
+        acoes = {"acoes": [("despedida", c["telefone"], None)]}
+        with redirect_stdout(io.StringIO()):
+            feitos = pw.executar_acoes(acoes, self.planilha, pw.SessaoWeb(),
+                                       pw.carregar_mensagens(), self.args)
+        self.assertEqual(len(feitos), 1)
+        self.assertEqual(c["etapa"], "despedida")
+        self.assertEqual(c["status"], "nao_contatar")     # continua fora da fila
+        self.assertEqual(pw.envios_hoje(), 0)              # não conta no limite
+        self.assertEqual(pw.ler_historico()[-1]["tipo"], "despedida")
+        # nunca duas vezes
+        with redirect_stdout(io.StringIO()):
+            feitos = pw.executar_acoes(acoes, self.planilha, pw.SessaoWeb(),
+                                       pw.carregar_mensagens(), self.args)
+        self.assertEqual(feitos, [])
+
     def test_executa_resumo_da_completa(self):
         c = self._contato_enviado(variante="completa", etapa="apresentacao",
                                   resposta="respondeu", versao_textos="v2")
@@ -1020,6 +1136,94 @@ class TestAcoesEAvisos(TestModoAutomatico):
         self.assertEqual(c["etapa"], "resumo")
         self.assertEqual(c["resposta"], "aguardando")
         self.assertEqual(pw.ler_historico()[-1]["tipo"], "resumo")
+        self.assertEqual(_SessaoFalsa.anexos, ["demonstracao.pdf"])
+
+    def test_pdf_anexado_junto_com_a_apresentacao(self):
+        c = self._contato_enviado(variante="curta", etapa="abertura",
+                                  resposta="respondeu")
+        self.planilha.salvar()
+        _SessaoFalsa.roteiro = [(True, None, True)]
+        with redirect_stdout(io.StringIO()):
+            feitos = pw.executar_acoes({"acoes": [("apresentacao", c["telefone"], None)]},
+                                       self.planilha, pw.SessaoWeb(),
+                                       pw.carregar_mensagens(), self.args)
+        self.assertEqual(len(feitos), 1)
+        self.assertEqual(_SessaoFalsa.anexos, ["demonstracao.pdf"])
+
+    def test_pdf_desativado_quando_config_vazia(self):
+        c = self._contato_enviado(variante="curta", etapa="abertura",
+                                  resposta="respondeu")
+        self.planilha.salvar()
+        m = dict(pw.carregar_mensagens())
+        m["demonstracao"] = {"pdf": "", "html": ""}
+        _SessaoFalsa.roteiro = [(True, None, True)]
+        with redirect_stdout(io.StringIO()):
+            pw.executar_acoes({"acoes": [("apresentacao", c["telefone"], None)]},
+                              self.planilha, pw.SessaoWeb(), m, self.args)
+        self.assertEqual(_SessaoFalsa.anexos, [])
+
+    def test_despedida_nao_anexa_pdf(self):
+        c = self._contato_enviado(status="nao_contatar", resposta="sem interesse")
+        self.planilha.salvar()
+        _SessaoFalsa.roteiro = [(True, None, True)]
+        with redirect_stdout(io.StringIO()):
+            pw.executar_acoes({"acoes": [("despedida", c["telefone"], None)]},
+                              self.planilha, pw.SessaoWeb(),
+                              pw.carregar_mensagens(), self.args)
+        self.assertEqual(_SessaoFalsa.anexos, [])
+
+
+class TestDemonstracao(BasePw):
+    """2ª etapa: link da demonstração (html) e caminho do PDF a anexar."""
+
+    CONTATO = {"clinica": "Ferraz Odontologia", "bairro": "São José",
+               "cidade": "Aracaju"}
+
+    @staticmethod
+    def _mensagens(**demo):
+        m = dict(pw.carregar_mensagens())
+        base = {"pdf": "demonstracao.pdf", "html": ""}
+        base.update(demo)
+        m["demonstracao"] = base
+        return m
+
+    def test_link_entrna_na_apresentacao_quando_html_configurado(self):
+        m = self._mensagens(html="https://exemplo.github.io/demonstracao/")
+        msg = pw.montar_apresentacao(self.CONTATO, m)
+        self.assertIn("Demonstração interativa: "
+                      "https://exemplo.github.io/demonstracao/", msg)
+        self.assertIsNone(pw.validar_mensagem(msg, self.CONTATO, "apresentacao"))
+
+    def test_link_entrna_no_resumo_quando_html_configurado(self):
+        m = self._mensagens(html="https://exemplo.github.io/demonstracao/")
+        msg = pw.montar_resumo_completa(self.CONTATO, m)
+        self.assertIn("https://exemplo.github.io/demonstracao/", msg)
+        self.assertIsNone(pw.validar_mensagem(msg, self.CONTATO, "resumo"))
+
+    def test_sem_url_o_texto_nao_muda(self):
+        for montar, tipo in ((pw.montar_apresentacao, "apresentacao"),
+                             (pw.montar_resumo_completa, "resumo")):
+            msg = montar(self.CONTATO, self._mensagens())
+            self.assertNotIn("Demonstração interativa", msg)
+            self.assertIsNone(pw.validar_mensagem(msg, self.CONTATO, tipo))
+
+    def test_pdf_padrao_resolvido_ao_lado_do_script(self):
+        pdf = pw.demonstracao_pdf(self._mensagens())
+        self.assertIsNotNone(pdf)
+        self.assertEqual(pdf.name, "demonstracao.pdf")
+        self.assertTrue(pdf.is_file())
+
+    def test_pdf_desativado_ou_inexistente_gera_none(self):
+        self.assertIsNone(pw.demonstracao_pdf(self._mensagens(pdf="")))
+        self.assertIsNone(pw.demonstracao_pdf(
+            self._mensagens(pdf="nao_existe.pdf")))
+
+    def test_sem_chave_demonstracao_nao_quebra(self):
+        m = dict(pw.carregar_mensagens())
+        m.pop("demonstracao", None)
+        self.assertIsNone(pw.demonstracao_pdf(m))
+        self.assertNotIn("Demonstração interativa",
+                         pw.montar_resumo_completa(self.CONTATO, m))
 
 
 class TestReset(unittest.TestCase):
