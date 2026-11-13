@@ -46,5 +46,9 @@ def notificar_telegram(
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return 200 <= getattr(resp, "status", 200) < 300
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError):
+    except urllib.error.HTTPError as exc:
+        exc.close()
         return False
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+

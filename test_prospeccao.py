@@ -1136,7 +1136,8 @@ class TestAcoesEAvisos(TestModoAutomatico):
         self.assertEqual(c["etapa"], "resumo")
         self.assertEqual(c["resposta"], "aguardando")
         self.assertEqual(pw.ler_historico()[-1]["tipo"], "resumo")
-        self.assertEqual(_SessaoFalsa.anexos, ["demonstracao.pdf"])
+        esperado = pw.demonstracao_pdf(pw.carregar_mensagens()).name
+        self.assertEqual(_SessaoFalsa.anexos, [esperado])
 
     def test_pdf_anexado_junto_com_a_apresentacao(self):
         c = self._contato_enviado(variante="curta", etapa="abertura",
@@ -1148,7 +1149,8 @@ class TestAcoesEAvisos(TestModoAutomatico):
                                        self.planilha, pw.SessaoWeb(),
                                        pw.carregar_mensagens(), self.args)
         self.assertEqual(len(feitos), 1)
-        self.assertEqual(_SessaoFalsa.anexos, ["demonstracao.pdf"])
+        esperado = pw.demonstracao_pdf(pw.carregar_mensagens()).name
+        self.assertEqual(_SessaoFalsa.anexos, [esperado])
 
     def test_pdf_desativado_quando_config_vazia(self):
         c = self._contato_enviado(variante="curta", etapa="abertura",
