@@ -1243,5 +1243,17 @@ class TestReset(unittest.TestCase):
         self.assertEqual(contatos[0]["followups"], "")
 
 
+class TestClinicaAbertaHoje(unittest.TestCase):
+    def test_sabado_aberto_e_fechado(self):
+        sabado = datetime(2026, 11, 14, 10, 0)  # sábado
+        self.assertTrue(pw.clinica_aberta_hoje(
+            {"horarios": "Seg: 08:00–18:00 | Sáb: 08:00–12:00"}, sabado))
+        self.assertTrue(pw.clinica_aberta_hoje(
+            {"horarios": "Sáb: Atendimento 24 horas"}, sabado))
+        self.assertFalse(pw.clinica_aberta_hoje(
+            {"horarios": "Seg: 08:00–18:00 | Sáb: Fechado"}, sabado))
+        self.assertFalse(pw.clinica_aberta_hoje({"horarios": ""}, sabado))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

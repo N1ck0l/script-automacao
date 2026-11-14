@@ -771,6 +771,107 @@ def enviar_modo_manual(contato: dict, mensagem: str) -> bool:
     return True
 
 
+DIAS_SEMANA_ABREV = ("Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom")
+
+
+def clinica_aberta_hoje(contato: dict, agora: datetime | None = None) -> bool:
+    """True se a coluna 'horarios' indicar funcionamento no dia atual."""
+    horarios = (contato.get("horarios") or "").strip()
+    if not horarios:
+        return False
+    dia = DIAS_SEMANA_ABREV[(agora or datetime.now()).weekday()]
+    prefixo = f"{dia.lower()}:"
+    for parte in horarios.split("|"):
+        trecho = parte.strip()
+        if trecho.lower().startswith(prefixo):
+            valor = trecho.split(":", 1)[1].strip().lower()
+            return bool(valor) and "fechado" not in valor
+    return False
+
+
+class _By:
+    CSS_SELECTOR = "css selector"
+
+
+class _Keys:
+    ENTER = "\ue007"
+    CONTROL = "\ue009"
+    DELETE = "\ue017"
+
+
+class _PlaywrightElement:
+    """Adapta um Locator do Playwright para a interface usada por SessaoWeb."""
+
+    def __init__(self, locator) -> None:
+        self._loc = locator
+
+    def get_attribute(self, name: str) -> str:
+        if name == "innerText":
+            return self._loc.evaluate("el => el.innerText || ''")
+        val = self._loc.get_attribute(name)
+        return "" if val is None else val
+
+    def find_elements(self, _by: str, selector: str) -> list["_PlaywrightElement"]:
+        sub = self._loc.locator(selector)
+        return [_PlaywrightElement(sub.nth(i)) for i in range(sub.count())]
+
+    def click(self) -> None:
+        self._loc.click(timeout=5000)
+
+    def is_displayed(self) -> bool:
+        return self._loc.is_visible()
+
+    def send_keys(self, *keys: str) -> None:
+        if keys == (_Keys.ENTER,):
+            self._loc.press("Enter")
+        elif keys == (_Keys.CONTROL, "a"):
+            self._loc.press("Control+a")
+        elif keys == (_Keys.DELETE,):
+            self._loc.press("Delete")
+        elif len(keys) == 1 and Path(keys[0]).exists():
+            self._loc.set_input_files(keys[0])
+        else:
+            self._loc.type("".join(keys))
+
+
+class _PlaywrightDriver:
+    """Adapta Playwright (contexto persistente) para a interface usada por SessaoWeb."""
+
+    def __init__(self, perfil_dir: Path, visivel: bool) -> None:
+        from playwright.sync_api import sync_playwright
+        self._pw = sync_playwright().start()
+        args = ["--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding"]
+        if not visivel:
+            args.append("--window-position=-32000,-32000")
+        self._ctx = self._pw.chromium.launch_persistent_context(
+            user_data_dir=str(perfil_dir),
+            headless=False,
+            viewport={"width": 1366, "height": 900},
+            locale="pt-BR",
+            args=args,
+        )
+        self._page = self._ctx.pages[0] if self._ctx.pages else self._ctx.new_page()
+
+    def get(self, url: str) -> None:
+        self._page.goto(url, wait_until="domcontentloaded", timeout=45000)
+
+    def find_elements(self, _by: str, selector: str) -> list[_PlaywrightElement]:
+        loc = self._page.locator(selector)
+        return [_PlaywrightElement(loc.nth(i)) for i in range(loc.count())]
+
+    def execute_script(self, script: str, element: _PlaywrightElement) -> None:
+        if "style.display" in script:
+            element._loc.evaluate("el => { el.style.display='block'; }")
+
+    def quit(self) -> None:
+        try:
+            self._ctx.close()
+        finally:
+            self._pw.stop()
+
+
 class SessaoWeb:
     """WhatsApp Web via Selenium, com UM navegador reaproveitado na sessão.
 
@@ -797,23 +898,22 @@ class SessaoWeb:
 
     def healthcheck(self, segundos: int = 25) -> dict:
         """Verifica se o WhatsApp Web está logado e com os seletores esperados."""
-        from selenium.webdriver.common.by import By
         driver = self._garantir_driver()
         driver.get("https://web.whatsapp.com/")
         fim = time.time() + segundos
         status = "timeout"
         while time.time() < fim:
-            if driver.find_elements(By.CSS_SELECTOR, self.SELETORES["lista_chats"]):
+            if driver.find_elements(_By.CSS_SELECTOR, self.SELETORES["lista_chats"]):
                 status = "conectado"
                 break
-            if driver.find_elements(By.CSS_SELECTOR, self.SELETORES["qr"]):
+            if driver.find_elements(_By.CSS_SELECTOR, self.SELETORES["qr"]):
                 status = "deslogado"
                 break
             time.sleep(0.5)
         return {
             "status": status,
             "seletores_ativos": {
-                k: len(driver.find_elements(By.CSS_SELECTOR, v))
+                k: len(driver.find_elements(_By.CSS_SELECTOR, v))
                 for k, v in self.SELETORES.items()
             },
         }
@@ -831,18 +931,21 @@ class SessaoWeb:
                 trava = TravaEnvio()
                 trava.__enter__()  # levanta EnvioEmAndamento se já houver outro
                 self._trava = trava
-            from selenium import webdriver
-            opcoes = webdriver.ChromeOptions()
-            for flag in opcoes_janela(JANELA_VISIVEL):
-                opcoes.add_argument(flag)
-            # A janela fica fora da tela/atrás de outras: sem isto o Chrome
-            # desacelera a aba e a conferência de entrega fica lenta/inconclusiva.
-            for flag in ("--disable-background-timer-throttling",
-                         "--disable-backgrounding-occluded-windows",
-                         "--disable-renderer-backgrounding"):
-                opcoes.add_argument(flag)
-            opcoes.add_argument(f"--user-data-dir={PERFIL_SELENIUM}")  # mantém o login
-            self.driver = webdriver.Chrome(options=opcoes)
+            try:
+                from selenium import webdriver
+                opcoes = webdriver.ChromeOptions()
+                for flag in opcoes_janela(JANELA_VISIVEL):
+                    opcoes.add_argument(flag)
+                # A janela fica fora da tela/atrás de outras: sem isto o Chrome
+                # desacelera a aba e a conferência de entrega fica lenta/inconclusiva.
+                for flag in ("--disable-background-timer-throttling",
+                             "--disable-backgrounding-occluded-windows",
+                             "--disable-renderer-backgrounding"):
+                    opcoes.add_argument(flag)
+                opcoes.add_argument(f"--user-data-dir={PERFIL_SELENIUM}")  # mantém o login
+                self.driver = webdriver.Chrome(options=opcoes)
+            except ImportError:
+                self.driver = _PlaywrightDriver(PERFIL_SELENIUM, JANELA_VISIVEL)
             self.aberto_em = time.time()
             print("\n[AGUARDE] Escaneie o QR Code se necessário (o perfil salvo "
                   "acelera nas próximas vezes)...")
@@ -884,10 +987,9 @@ class SessaoWeb:
             return False
 
         try:
-            from selenium.webdriver.common.keys import Keys
             driver = self._garantir_driver()
         except ImportError:
-            print("[ERRO] Selenium não instalado. Rode: pip install -r requirements.txt")
+            print("[ERRO] Instale selenium ou playwright (pip install -r requirements.txt)")
             self.ultimo_erro = self.TECNICO
             return False
         except EnvioEmAndamento as exc:
@@ -962,7 +1064,7 @@ class SessaoWeb:
                 return False
 
             antes = self._contar_bolhas_iguais(driver, mensagem)
-            caixa.send_keys(Keys.ENTER)
+            caixa.send_keys(_Keys.ENTER)
             enter_dado = True
 
             # Confirmação: apareceu na conversa UMA bolha nova com exatamente o
@@ -1000,8 +1102,7 @@ class SessaoWeb:
 
     def _caixa_atual(self, driver):
         """Caixa de mensagem atual (o WhatsApp recria o elemento ao carregar)."""
-        from selenium.webdriver.common.by import By
-        caixas = driver.find_elements(By.CSS_SELECTOR, self.SELETOR_CAIXA)
+        caixas = driver.find_elements(_By.CSS_SELECTOR, self.SELETOR_CAIXA)
         return caixas[0] if caixas else None
 
     @staticmethod
@@ -1018,20 +1119,19 @@ class SessaoWeb:
         Retorna (caixa, None) | (None, SEM_WHATSAPP) | (None, DESLOGADO) |
         (None, None) no tempo esgotado.
         """
-        from selenium.webdriver.common.by import By
         qr_visto_desde = None
         fim = time.time() + segundos
         while time.time() < fim:
-            caixas = driver.find_elements(By.CSS_SELECTOR, self.SELETOR_CAIXA)
+            caixas = driver.find_elements(_By.CSS_SELECTOR, self.SELETOR_CAIXA)
             if caixas:
                 return caixas[0], None
             for dialogo in driver.find_elements(
-                    By.CSS_SELECTOR, "[role='dialog'], [data-animate-modal-popup]"):
+                    _By.CSS_SELECTOR, "[role='dialog'], [data-animate-modal-popup]"):
                 texto = self._texto(dialogo).lower()
                 if "não está no whatsapp" in texto or "inválido" in texto \
                         or "not on whatsapp" in texto or "invalid" in texto:
                     return None, self.SEM_WHATSAPP
-            if driver.find_elements(By.CSS_SELECTOR,
+            if driver.find_elements(_By.CSS_SELECTOR,
                                     "canvas[aria-label*='QR' i], [data-ref] canvas"):
                 qr_visto_desde = qr_visto_desde or time.time()
                 if time.time() - qr_visto_desde > 20:  # dá tempo de reconectar
@@ -1042,12 +1142,11 @@ class SessaoWeb:
     @staticmethod
     def _contar_bolhas_iguais(driver, mensagem: str) -> int:
         """Quantas mensagens visíveis na conversa têm exatamente este texto."""
-        from selenium.webdriver.common.by import By
         total = 0
-        for bolha in driver.find_elements(By.CSS_SELECTOR,
+        for bolha in driver.find_elements(_By.CSS_SELECTOR,
                                           "#main [data-pre-plain-text]"):
             try:
-                textos = bolha.find_elements(By.CSS_SELECTOR,
+                textos = bolha.find_elements(_By.CSS_SELECTOR,
                                              "[data-testid='selectable-text']")
                 texto = (textos[0] if textos else bolha).get_attribute("innerText") or ""
             except Exception:  # noqa: BLE001 - bolha re-renderizada; conta na próxima
@@ -1061,10 +1160,9 @@ class SessaoWeb:
         """Apaga o rascunho para não sobrar texto na conversa (nem misturar
         com o próximo envio para o mesmo número)."""
         try:
-            from selenium.webdriver.common.keys import Keys
             caixa.click()
-            caixa.send_keys(Keys.CONTROL, "a")
-            caixa.send_keys(Keys.DELETE)
+            caixa.send_keys(_Keys.CONTROL, "a")
+            caixa.send_keys(_Keys.DELETE)
         except Exception:  # noqa: BLE001
             print("[AVISO] Não consegui limpar o rascunho — apague-o no WhatsApp Web.")
 
@@ -1081,10 +1179,9 @@ class SessaoWeb:
             print(f"[AVISO] Demonstração não encontrada: {caminho.name}")
             return False
         try:
-            from selenium.webdriver.common.by import By
             driver = self.driver
             botoes = [b for b in driver.find_elements(
-                By.CSS_SELECTOR,
+                _By.CSS_SELECTOR,
                 'div[title="Anexar"], div[title="Attach"], span[data-icon="plus"], '
                 'span[data-icon="clip"]') if b.is_displayed()]
             if not botoes:
@@ -1096,19 +1193,19 @@ class SessaoWeb:
             eh_imagem = caminho.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
             alvo = None
             itens = driver.find_elements(
-                By.CSS_SELECTOR, '[role="menuitem"], [role="button"]')
+                _By.CSS_SELECTOR, '[role="menuitem"], [role="button"]')
             if eh_imagem:
                 for item in itens:
                     rotulo = (item.get_attribute("innerText") or "").strip().lower()
                     if ("foto" in rotulo or "photo" in rotulo or "image" in rotulo
-                            or item.find_elements(By.CSS_SELECTOR, 'span[data-icon="image"]')):
+                            or item.find_elements(_By.CSS_SELECTOR, 'span[data-icon="image"]')):
                         alvo = item
                         break
             if alvo is None:
                 for item in itens:
                     rotulo = (item.get_attribute("innerText") or "").strip().lower()
                     if "document" in rotulo or item.find_elements(
-                            By.CSS_SELECTOR, 'span[data-icon="document"]'):
+                            _By.CSS_SELECTOR, 'span[data-icon="document"]'):
                         alvo = item
                         break
             if alvo is None:
@@ -1116,7 +1213,7 @@ class SessaoWeb:
                       "manualmente no WhatsApp Web.")
                 return False
             alvo.click()
-            entradas = driver.find_elements(By.CSS_SELECTOR, 'input[type="file"]')
+            entradas = driver.find_elements(_By.CSS_SELECTOR, 'input[type="file"]')
             if not entradas:
                 print("[AVISO] Seletor de arquivo não encontrado — anexe o PDF "
                       "manualmente no WhatsApp Web.")
@@ -1132,7 +1229,7 @@ class SessaoWeb:
             for _ in range(40):  # até ~20s
                 time.sleep(0.5)
                 visiveis = [b for b in driver.find_elements(
-                    By.CSS_SELECTOR, 'span[data-icon="send"]') if b.is_displayed()]
+                    _By.CSS_SELECTOR, 'span[data-icon="send"]') if b.is_displayed()]
                 if visiveis:
                     botao_envio = visiveis[0]
                     break
@@ -1463,15 +1560,14 @@ def _registrar(texto: str) -> None:
 
 def conectar_whatsapp(segundos: int = 300) -> bool:
     """Abre o WhatsApp Web com o perfil do script e espera o login (QR Code)."""
-    from selenium.webdriver.common.by import By
     sessao = SessaoWeb()
     try:
         driver = sessao._garantir_driver()
         driver.get("https://web.whatsapp.com")
-        print(f"Escaneie o QR Code no Chrome (até {segundos // 60} min)...")
+        print(f"Escaneie o QR Code no navegador (até {segundos // 60} min)...")
         fim = time.time() + segundos
         while time.time() < fim:
-            if driver.find_elements(By.CSS_SELECTOR, "#pane-side, #side"):
+            if driver.find_elements(_By.CSS_SELECTOR, "#pane-side, #side"):
                 time.sleep(5)  # deixa sincronizar
                 print("[OK] WhatsApp Web conectado. O envio automático já pode rodar.")
                 return True
@@ -1975,7 +2071,7 @@ def rodar_automatico(planilha: Planilha, args: argparse.Namespace,
     na conversa ou 2 falhas técnicas seguidas. Retorna o número de envios.
     """
     agora = datetime.now()
-    if not dia_util(agora):
+    if not getattr(args, "fim_de_semana", False) and not dia_util(agora):
         _registrar("[AUTO] Hoje não é dia útil (fim de semana/feriado) — nada a fazer.")
         return 0
     atraso = random.randint(0, max(0, getattr(args, "atraso_max", 0)) * 60)
@@ -2008,11 +2104,15 @@ def rodar_automatico(planilha: Planilha, args: argparse.Namespace,
     sessao = SessaoWeb()
     try:
         cota = args.limite_dia - envios_hoje()
-        candidatos = [c for c in planilha.contatos if c["status"] == PENDENTE]
+        abertas_hoje = getattr(args, "abertas_hoje", False)
+        candidatos = [c for c in planilha.contatos
+                      if c["status"] == PENDENTE
+                      and (not abertas_hoje or clinica_aberta_hoje(c, agora))]
         novos = sorted(candidatos, key=score_lead, reverse=True)  # celulares + maior potencial 1º
         retomar = [c for c in planilha.contatos
                    if precisa_followup(c, getattr(args, "dias_followup", 2),
-                                       getattr(args, "max_followups", 1))]
+                                       getattr(args, "max_followups", 1))
+                   and (not abertas_hoje or clinica_aberta_hoje(c, agora))]
         fila = [(c, "followup") for c in retomar] + [(c, "novo") for c in novos]
         contatadas = clinicas_ja_contatadas(planilha.contatos)
         _registrar(f"[AUTO] Início: cota {max(cota, 0)}, {len(retomar)} follow-up(s), "
@@ -2191,6 +2291,9 @@ def _criar_parser() -> argparse.ArgumentParser:
                         help="Fim da janela de envio, hora inteira (padrão: 19)")
     parser.add_argument("--fim-de-semana", action="store_true",
                         help="Permite envios no sábado e domingo (bloqueado por padrão)")
+    parser.add_argument("--abertas-hoje", action="store_true",
+                        help="Filtra apenas clínicas cujo campo 'horarios' indica "
+                             "funcionamento hoje")
     parser.add_argument("--clinica", "--status", dest="clinica", default=None,
                         help="Filtra pelo nome da clínica (substring, ex.: 'Ferraz'). "
                              "--status é um alias antigo.")
@@ -2332,6 +2435,12 @@ def main() -> None:
         if not contatos:
             print(f"[ERRO] Nenhum contato com segmento '{args.segmento}'. "
                   "Classifique o CSV (coluna segmento) ou use outro filtro.")
+            sys.exit(1)
+
+    if args.abertas_hoje:
+        contatos = [c for c in contatos if clinica_aberta_hoje(c)]
+        if not contatos:
+            print("[ERRO] Nenhuma clínica marcada como aberta hoje na planilha.")
             sys.exit(1)
 
     if args.respostas:
