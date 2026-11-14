@@ -242,5 +242,20 @@ class TestRodizio(unittest.TestCase):
                 self.assertNotIn(proibido, termo.lower(), termo)
 
 
+class TestExtrairHorarios(unittest.TestCase):
+    def test_extrai_dias_e_sabado(self):
+        bruto = (
+            "segunda-feira, 08:00–18:00; terça-feira, 08:00–18:00; "
+            "sábado, 08:00–12:00; domingo, Fechado"
+        )
+        res = mm.extrair_horarios(bruto)
+        self.assertIn("Seg: 08:00–18:00", res)
+        self.assertIn("Sáb: 08:00–12:00", res)
+        self.assertIn("Dom: Fechado", res)
+
+    def test_sem_horarios_retorna_vazio(self):
+        self.assertEqual(mm.extrair_horarios("Rua X, 123"), "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

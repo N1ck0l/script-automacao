@@ -177,6 +177,7 @@ def preparar_novo_registro(dados: dict, cidade: str = CIDADE_PADRAO,
         telefone=telefone,
         site=(dados.get("site") or "").strip(),
         avaliacoes=(dados.get("avaliacoes") or "").strip(),
+        horarios=(dados.get("horarios") or "").strip(),
         segmento=(segmento or pw.inferir_segmento(clinica)).lower(),
         status=pw.PENDENTE,
     )
@@ -282,6 +283,68 @@ def _extrair_telefone(page) -> str:
     return m.group(0) if m else ""
 
 
+def extrair_horarios(texto: str) -> str:
+    """Extrai e compacta os dias e horários de funcionamento do Google Maps."""
+    if not texto:
+        return ""
+    dias_ordem = [
+        ("segunda-feira", "Seg"), ("segunda", "Seg"),
+        ("terça-feira", "Ter"), ("terca-feira", "Ter"), ("terça", "Ter"), ("terca", "Ter"),
+        ("quarta-feira", "Qua"), ("quarta", "Qua"),
+        ("quinta-feira", "Qui"), ("quinta", "Qui"),
+        ("sexta-feira", "Sex"), ("sexta", "Sex"),
+        ("sábado", "Sáb"), ("sabado", "Sáb"),
+        ("domingo", "Dom"),
+    ]
+    encontrados: dict[str, str] = {}
+    limpo = texto.replace("\u202f", " ").replace("\xa0", " ")
+    for padrao, abrev in dias_ordem:
+        if abrev in encontrados:
+            continue
+        m = re.search(
+            rf"{padrao}\s*[,:\-]?\s*(Atendimento 24 horas|Aberto 24 horas|Fechado|"
+            rf"\d{{1,2}}:\d{{2}}\s*[–\-aàs]+\s*\d{{1,2}}:\d{{2}}(?:\s*[,;/]\s*\d{{1,2}}:\d{{2}}\s*[–\-aàs]+\s*\d{{1,2}}:\d{{2}})?)",
+            limpo,
+            re.IGNORECASE,
+        )
+        if m:
+            val = re.sub(r"\s+", " ", m.group(1)).strip(" ,.;")
+            encontrados[abrev] = val
+    if not encontrados:
+        return ""
+    ordem = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+    return " | ".join(f"{d}: {encontrados[d]}" for d in ordem if d in encontrados)
+
+
+def _extrair_horarios_da_pagina(page) -> str:
+    """Lê a tabela/aria-label de horários no card do Google Maps."""
+    partes: list[str] = []
+    try:
+        btn = page.locator('[data-item-id="oh"], [aria-label*="Horário" i], [aria-label*="segunda" i]').first
+        if btn.count() > 0:
+            rotulo = btn.get_attribute("aria-label") or ""
+            if rotulo:
+                partes.append(rotulo)
+            if "segunda" not in rotulo.lower():
+                try:
+                    btn.click(timeout=1500)
+                    pausa(0.4, 0.8)
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        tabelas = page.locator('table[class*="eK4R0e"], [aria-label*="segunda-feira" i], [aria-label*="sábado" i]')
+        for i in range(min(tabelas.count(), 4)):
+            el = tabelas.nth(i)
+            rot = el.get_attribute("aria-label") or ""
+            txt = el.inner_text(timeout=1500) or ""
+            partes.extend([rot, txt])
+    except Exception:  # noqa: BLE001
+        pass
+    return extrair_horarios("\n".join(partes))
+
+
 def _extrair_avaliacoes_da_pagina(page) -> str:
     """Reúne aria-labels de estrelas + texto principal e parseia a nota."""
     partes: list[str] = []
@@ -320,6 +383,7 @@ def minerar_local(page, url: str, cidade: str = CIDADE_PADRAO) -> dict | None:
     site = _atributo(page, 'a[data-item-id="authority"]', "href")
     telefone = _extrair_telefone(page)
     avaliacoes = _extrair_avaliacoes_da_pagina(page)
+    horarios = _extrair_horarios_da_pagina(page)
 
     if not nome:
         return None
@@ -331,6 +395,7 @@ def minerar_local(page, url: str, cidade: str = CIDADE_PADRAO) -> dict | None:
         "telefone": telefone,
         "site": site,
         "avaliacoes": avaliacoes,
+        "horarios": horarios,
     }
 
 

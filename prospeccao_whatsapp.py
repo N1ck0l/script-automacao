@@ -111,7 +111,8 @@ def opcoes_janela(visivel: bool) -> list[str]:
 
 COLUNAS = ["clinica", "bairro", "cidade", "telefone", "site", "avaliacoes",
            "segmento", "status", "resposta", "atualizado_em", "ultimo_envio",
-           "followups", "variante", "etapa", "menu", "versao_textos", "estagio"]
+           "followups", "variante", "etapa", "menu", "versao_textos",
+           "estagio", "horarios"]
 # segmento: "odonto" | "medico" — inferido na mineração (nome/termo de busca);
 #        filtro --segmento no envio; vazio = não classificado
 # variante: teste A/B ("curta" | "completa")
