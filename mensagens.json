@@ -66,7 +66,7 @@
     "_ajuda": "Demonstração da 2ª etapa (apresentação/resumo). 'pdf': arquivo anexado ao lado do script ('' = não anexa; troque para 'demonstracao.png' para enviar como imagem inline sem exigir download). 'html': URL da página interativa hospedada ('' = não envia o link).",
     "pdf": "demonstracao.png",
     "imagem": "demonstracao.png",
-    "html": "https://n1ck0l.github.io/script-automacao/"
+    "html": "https://n1ck0l.github.io/automacoes/"
   },
   "followups": [
     "{saudacao} Retomo brevemente minha mensagem anterior para que não se perca na rotina do dia. Caso este assunto seja conduzido por outra pessoa, agradeço se puder encaminhá-la ao responsável pela gestão {da_clinica}. Se não for oportuno no momento, sem problema.",
