@@ -584,6 +584,53 @@
   }
   footer a { color: var(--text); font-weight: 500; text-decoration: none; }
   footer a:hover { color: var(--emerald); }
+
+  /* ---------- catálogo de soluções ---------- */
+  .catalogo-filtros {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    margin-bottom: 28px;
+  }
+  .catalogo-btn {
+    border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+    font-family: var(--font-sans); font-size: 13px; font-weight: 600;
+    padding: 8px 14px; border-radius: 999px; cursor: pointer;
+    transition: border-color .15s, background .15s, color .15s;
+  }
+  .catalogo-btn:hover { border-color: var(--border-strong); color: var(--text); }
+  .catalogo-btn.ativo {
+    background: var(--text); color: #fff; border-color: var(--text);
+  }
+  .catalogo-grid {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px;
+  }
+  @media (max-width: 720px) { .catalogo-grid { grid-template-columns: 1fr; } }
+  .catalogo-item {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px 22px;
+    display: flex; flex-direction: column; gap: 8px;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .catalogo-item:hover { border-color: var(--border-strong); box-shadow: var(--sombra-sm); }
+  .catalogo-item.oculto { display: none; }
+  .catalogo-topo {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .catalogo-tag {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    letter-spacing: .04em; text-transform: uppercase;
+    color: var(--emerald); background: #ECFDF5;
+    border: 1px solid #A7F3D0; border-radius: 999px; padding: 3px 9px;
+  }
+  .catalogo-meta {
+    font-family: var(--font-mono); font-size: 11px; color: var(--subtle);
+  }
+  .catalogo-item h4 {
+    font-size: 16px; font-weight: 700; color: var(--text); margin: 2px 0 0;
+    letter-spacing: -0.02em;
+  }
+  .catalogo-item p {
+    font-size: 14px; line-height: 1.55; color: var(--muted); margin: 0;
+  }
 </style>
 </head>
 <body>
@@ -598,6 +645,7 @@
       <a href="#triagem">Triagem</a>
       <a href="#nfe">NF-e</a>
       <a href="#implantacao">Implantação</a>
+      <a href="#solucoes">Soluções</a>
       <a href="#duvidas">Dúvidas</a>
       <a class="nav-btn" href="https://wa.me/5579981677954?text=Ol%C3%A1%20Nickolas%2C%20gostaria%20de%20agendar%20uma%20demonstra%C3%A7%C3%A3o%20das%20automa%C3%A7%C3%B5es%20para%20minha%20cl%C3%ADnica." target="_blank" rel="noopener">WhatsApp</a>
     </div>
@@ -844,6 +892,97 @@
         <h4>Uso diário</h4>
         <p>A recepção recebe as conversas organizadas e valida as notas com um clique.</p>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<section id="solucoes" class="fundo-cinza">
+  <div class="container">
+    <div class="secao-titulo reveal">Catálogo completo</div>
+    <h2 class="reveal">Outras soluções sob medida</h2>
+    <p class="secao-sub reveal">Além da triagem no WhatsApp e da NF-e, estruturamos o ecossistema digital completo para clínicas e empresas de serviço.</p>
+
+    <div class="catalogo-filtros reveal" role="tablist" aria-label="Filtrar soluções por categoria">
+      <button type="button" class="catalogo-btn ativo" data-cat="todas" aria-pressed="true">Todas (8)</button>
+      <button type="button" class="catalogo-btn" data-cat="whatsapp" aria-pressed="false">Atendimento &amp; WhatsApp</button>
+      <button type="button" class="catalogo-btn" data-cat="financeiro" aria-pressed="false">Financeiro &amp; NF-e</button>
+      <button type="button" class="catalogo-btn" data-cat="sites" aria-pressed="false">Sites &amp; Captação</button>
+      <button type="button" class="catalogo-btn" data-cat="dashboards" aria-pressed="false">Dashboards &amp; Gestão</button>
+    </div>
+
+    <div class="catalogo-grid">
+      <article class="catalogo-item reveal" data-cat="whatsapp">
+        <div class="catalogo-topo">
+          <span class="catalogo-tag">WhatsApp</span>
+          <span class="catalogo-meta">AUTO-01</span>
+        </div>
+        <h4>Confirmação de consultas e lista de espera</h4>
+        <p>Lembretes automáticos 24h antes do horário e disparo imediato para encaixe quando um paciente desmarca.</p>
+      </article>
+
+      <article class="catalogo-item reveal" data-cat="whatsapp">
+        <div class="catalogo-topo">
+          <span class="catalogo-tag">WhatsApp</span>
+          <span class="catalogo-meta">AUTO-02</span>
+        </div>
+        <h4>Reativação e avaliações no Google</h4>
+        <p>Convite automático para retorno periódico (ex.: 6 meses) e envio do link de avaliação pós-atendimento.</p>
+      </article>
+
+      <article class="catalogo-item reveal" data-cat="financeiro">
+        <div class="catalogo-topo">
+          <span class="catalogo-tag">Financeiro</span>
+          <span class="catalogo-meta">FIN-01</span>
+        </div>
+        <h4>Emissão automatizada de NFS-e / NF-e</h4>
+        <p>Preenchimento automático a partir dos dados da triagem e envio do PDF/XML para o paciente sem redigitação.</p>
+      </article>
+
+      <article class="catalogo-item reveal" data-cat="financeiro">
+        <div class="catalogo-topo">
+          <span class="catalogo-tag">Financeiro</span>
+          <span class="catalogo-meta">FIN-02</span>
+        </div>
+        <h4>Lembretes de cobrança e conciliação</h4>
+        <p>Envio programado de Pix/boletos antes do vencimento e consolidação automática de repasses em planilha.</p>
+      </article>
+
+      <article class="catalogo-item reveal" data-cat="sites">
+        <div class="catalogo-topo">
+          <span class="catalogo-tag">Sites</span>
+          <span class="catalogo-meta">WEB-01</span>
+        </div>
+        <h4>Site institucional integrado ao WhatsApp</h4>
+        <p>Página rápida e responsiva com botões de agendamento que já chegam na triagem com especialidade e contexto.</p>
+      </article>
+
+      <article class="catalogo-item reveal" data-cat="sites">
+        <div class="catalogo-topo">
+          <span class="catalogo-tag">Sites</span>
+          <span class="catalogo-meta">WEB-02</span>
+        </div>
+        <h4>Landing pages por especialidade ou exame</h4>
+        <p>Páginas focadas em conversão para procedimentos específicos (implantes, check-up, estética) e Google Meu Negócio.</p>
+      </article>
+
+      <article class="catalogo-item reveal" data-cat="dashboards">
+        <div class="catalogo-topo">
+          <span class="catalogo-tag">Dashboards</span>
+          <span class="catalogo-meta">BI-01</span>
+        </div>
+        <h4>Dashboard interativo de faturamento e agenda</h4>
+        <p>Painel dinâmico com taxa de comparecimento, faltas evitadas, ticket médio e receita por profissional ou convênio.</p>
+      </article>
+
+      <article class="catalogo-item reveal" data-cat="dashboards">
+        <div class="catalogo-topo">
+          <span class="catalogo-tag">Dashboards</span>
+          <span class="catalogo-meta">BI-02</span>
+        </div>
+        <h4>Origem de pacientes e relatórios no WhatsApp</h4>
+        <p>Acompanhamento de conversões por canal (Google, Instagram, indicação) com resumo semanal direto para a gestão.</p>
+      </article>
     </div>
   </div>
 </section>
@@ -1277,6 +1416,24 @@
     if (el) el.addEventListener("input", atualizarRoi);
   });
   atualizarRoi();
+
+  /* ---------- filtros do catálogo de soluções ---------- */
+  var btnsCat = document.querySelectorAll(".catalogo-btn");
+  var itensCat = document.querySelectorAll(".catalogo-item");
+  btnsCat.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var cat = btn.getAttribute("data-cat");
+      btnsCat.forEach(function (b) {
+        var ativo = b === btn;
+        b.classList.toggle("ativo", ativo);
+        b.setAttribute("aria-pressed", ativo ? "true" : "false");
+      });
+      itensCat.forEach(function (item) {
+        var visivel = cat === "todas" || item.getAttribute("data-cat") === cat;
+        item.classList.toggle("oculto", !visivel);
+      });
+    });
+  });
 })();
 </script>
 </body>
