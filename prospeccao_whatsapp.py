@@ -861,9 +861,12 @@ class _PlaywrightDriver:
         loc = self._page.locator(selector)
         return [_PlaywrightElement(loc.nth(i)) for i in range(loc.count())]
 
-    def execute_script(self, script: str, element: _PlaywrightElement) -> None:
-        if "style.display" in script:
-            element._loc.evaluate("el => { el.style.display='block'; }")
+    def execute_script(self, script: str, *args):
+        if args and isinstance(args[0], _PlaywrightElement):
+            if "style.display" in script:
+                args[0]._loc.evaluate("el => { el.style.display='block'; }")
+            return None
+        return self._page.evaluate(f"() => {{\n{script}\n}}")
 
     def quit(self) -> None:
         try:
@@ -1641,8 +1644,8 @@ def ler_conversa(sessao: "SessaoWeb", numero: str,
     bolhas: list[dict] = []
     anterior, estavel = -1, 0
     inicio = time.time()
-    while time.time() - inicio < 30:
-        time.sleep(1)
+    while time.time() - inicio < 12:
+        time.sleep(0.4)
         try:
             bolhas = [interpretar_bolha(pre, txt)
                       for pre, txt in driver.execute_script(JS_BOLHAS)]
@@ -1654,7 +1657,7 @@ def ler_conversa(sessao: "SessaoWeb", numero: str,
             continue
         estavel = estavel + 1 if len(bolhas) == anterior else 0
         anterior = len(bolhas)
-        if estavel >= 5 and time.time() - inicio >= 8:
+        if bolhas and estavel >= 3 and time.time() - inicio >= 2.0:
             break
     return bolhas
 
@@ -1670,8 +1673,36 @@ def mensagens_enviadas_por_numero(desde_dias: int = 30) -> dict[str, list[dict]]
     return grupos
 
 
+JS_NAO_LIDAS = """
+const pane = document.querySelector('#pane-side');
+if (!pane) return null;
+return pane.querySelectorAll('[aria-label*="não lida" i], [aria-label*="unread" i], [data-testid="icon-unread-count"]').length;
+"""
+
+
+def _contar_nao_lidas_visiveis(sessao: "SessaoWeb") -> int | None:
+    """Conta badges de mensagens não lidas em #pane-side sem recarregar a página."""
+    try:
+        driver = sessao._garantir_driver()
+        if not driver.find_elements(_By.CSS_SELECTOR, SessaoWeb.SELETORES["lista_chats"]):
+            driver.get("https://web.whatsapp.com/")
+            fim = time.time() + 10
+            while time.time() < fim:
+                if driver.find_elements(_By.CSS_SELECTOR, SessaoWeb.SELETORES["lista_chats"]):
+                    break
+                if driver.find_elements(_By.CSS_SELECTOR, SessaoWeb.SELETORES["qr"]):
+                    return None
+                time.sleep(0.3)
+        qtd = driver.execute_script(JS_NAO_LIDAS)
+        return int(qtd) if qtd is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def verificar_conversas(planilha: Planilha, sessao: "SessaoWeb",
-                        max_conversas: int = 40) -> dict:
+                        max_conversas: int = 40,
+                        ja_confirmados: set[str] | None = None,
+                        apenas_nao_lidas: bool = False) -> dict:
     """Uma passada de leitura: confere as entregas de hoje e lê respostas.
 
     - Entregas: para cada número que recebeu hoje, a última mensagem enviada
@@ -1682,17 +1713,25 @@ def verificar_conversas(planilha: Planilha, sessao: "SessaoWeb",
     hoje = datetime.now().date()
     historico = mensagens_enviadas_por_numero(30)
     por_tel = {c["telefone"]: c for c in planilha.contatos}
+    confirmados = ja_confirmados or set()
 
-    conferir = {tel for tel, regs in historico.items()
-                if any((_data(r["timestamp"]) or datetime.min).date() == hoje for r in regs)}
+    conferir_todos = {tel for tel, regs in historico.items()
+                      if any((_data(r["timestamp"]) or datetime.min).date() == hoje for r in regs)}
+    conferir = conferir_todos - confirmados
     responder = {c["telefone"] for c in planilha.contatos
                  if c["status"] == ENVIADO and c["telefone"] in historico
                  and ((c.get("resposta") or "") in RESPOSTAS_EM_ABERTO
                       # pessoa respondeu à abertura curta e a apresentação ainda não foi
                       or (c.get("resposta") == "respondeu" and _segunda_etapa(c)))}
-    relatorio = {"conferidas": 0, "nao_verificaveis": 0, "problemas": [], "respostas": [],
+    relatorio = {"conferidas": len(conferir_todos & confirmados),
+                 "nao_verificaveis": 0, "problemas": [], "respostas": [],
                  "optouts": [], "automaticas": [], "erro": None,
                  "acoes": [], "respostas_texto": []}
+
+    if apenas_nao_lidas and responder:
+        nao_lidas = _contar_nao_lidas_visiveis(sessao)
+        if nao_lidas == 0:
+            responder = set()
 
     for tel in sorted(conferir | responder)[:max_conversas]:
         contato = por_tel.get(tel, {"clinica": tel})
@@ -2096,6 +2135,7 @@ def rodar_automatico(planilha: Planilha, args: argparse.Namespace,
         recarregada.linhas, recarregada.contatos, recarregada.colunas)
 
     enviadas: list[str] = []
+    confirmados_agora: set[str] = set()
     sem_whatsapp: list[str] = []
     puladas: list[str] = []
     parada: str | None = None
@@ -2175,6 +2215,7 @@ def rodar_automatico(planilha: Planilha, args: argparse.Namespace,
                 falhas_seguidas = 0
                 intervalo_alvo = random.randint(args.intervalo_min, args.intervalo_max)
                 if resultado == "ok":
+                    confirmados_agora.add(contato["telefone"])
                     _registrar(f"[ENVIADO] {nome} (+{contato['telefone']}) "
                                f"[{tipo_msg}]")
                     continue
@@ -2205,7 +2246,11 @@ def rodar_automatico(planilha: Planilha, args: argparse.Namespace,
         # Leitura (sem digitar nada): entregas de hoje + respostas
         if parada is None or "desconectado" not in parada:
             try:
-                verificacao = verificar_conversas(planilha, sessao)
+                verificacao = verificar_conversas(
+                    planilha, sessao,
+                    ja_confirmados=confirmados_agora,
+                    apenas_nao_lidas=True,
+                )
                 _registrar(f"[VERIFICAÇÃO] conferidas {verificacao['conferidas']}, "
                            f"problemas {len(verificacao['problemas'])}, "
                            f"respostas {len(verificacao['respostas'])}, "
